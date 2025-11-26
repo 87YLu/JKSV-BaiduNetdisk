@@ -10,6 +10,7 @@ namespace config::keys
     inline constexpr std::string_view AUTO_UPLOAD             = "AutoUploadToRemote";
     inline constexpr std::string_view KEEP_LOCAL_BACKUPS      = "KeepLocalBackups";
     inline constexpr std::string_view USE_TITLE_IDS           = "AlwaysUseTitleID";
+    inline constexpr std::string_view ENGLISH_SAFE_TITLES     = "EnglishSafeTitles";
     inline constexpr std::string_view HOLD_FOR_DELETION       = "HoldForDeletion";
     inline constexpr std::string_view HOLD_FOR_RESTORATION    = "HoldForRestoration";
     inline constexpr std::string_view HOLD_FOR_OVERWRITE      = "HoldForOverWrite";

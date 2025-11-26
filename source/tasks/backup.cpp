@@ -38,7 +38,7 @@ void tasks::backup::create_new_backup_local(sys::threadpool::JobData taskData)
     const bool killTask            = castData->killTask;
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, titleInfo, saveInfo})) { TASK_FINISH_RETURN(task); }
 
     const std::string targetString = target.string();
     const bool hasZipExt           = std::strstr(targetString.c_str(), STRING_ZIP_EXT);
@@ -84,7 +84,7 @@ void tasks::backup::create_new_backup_remote(sys::threadpool::JobData taskData)
     remote::Storage *remote        = remote::get_remote_storage();
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(remote) || error::is_null(saveInfo))
+    else if (error::is_null({user, titleInfo, remote, saveInfo})) { TASK_FINISH_RETURN(task); }
     {
         TASK_FINISH_RETURN(task);
     }
@@ -158,7 +158,7 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
     remote::Storage *remote        = remote::get_remote_storage();
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(remote) || error::is_null(target)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({remote, target})) { TASK_FINISH_RETURN(task); }
 
     const fslib::Path tempPath{PATH_JKSV_TEMP};
     const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
@@ -203,10 +203,7 @@ void tasks::backup::restore_backup_local(sys::threadpool::JobData taskData)
     BackupMenuState *spawningState = castData->spawningState;
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo) || error::is_null(spawningState))
-    {
-        TASK_FINISH_RETURN(task);
-    }
+    else if (error::is_null({user, titleInfo, saveInfo, spawningState})) { TASK_FINISH_RETURN(task); }
 
     FsSaveDataExtraData extraData{};
     const uint8_t saveType    = saveInfo->save_data_type;
@@ -275,10 +272,7 @@ void tasks::backup::restore_backup_remote(sys::threadpool::JobData taskData)
     const bool autoBackup          = config::get_by_key(config::keys::AUTO_BACKUP_ON_RESTORE);
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo) || error::is_null(remote))
-    {
-        TASK_FINISH_RETURN(task);
-    }
+    else if (error::is_null({user, titleInfo, saveInfo, remote})) { TASK_FINISH_RETURN(task); }
 
     if (autoBackup) { auto_backup(task, castData); }
 
@@ -402,7 +396,7 @@ void tasks::backup::delete_backup_remote(sys::threadpool::JobData taskData)
     remote::Storage *remote        = remote::get_remote_storage();
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(target) || error::is_null(spawningState) || error::is_null(remote)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({target, spawningState, remote})) { TASK_FINISH_RETURN(task); }
 
     const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
     {
@@ -433,7 +427,7 @@ void tasks::backup::upload_backup(sys::threadpool::JobData taskData)
     remote::Storage *remote        = remote::get_remote_storage();
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(spawningState) || error::is_null(remote)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({spawningState, remote})) { TASK_FINISH_RETURN(task); }
 
     {
         const char *filename     = path.get_filename();
@@ -458,10 +452,7 @@ void tasks::backup::patch_backup(sys::threadpool::JobData taskData)
     BackupMenuState *spawningState = castData->spawningState;
     remote::Storage *remote        = remote::get_remote_storage();
     if (error::is_null(task)) { return; }
-    else if (error::is_null(remoteItem) || error::is_null(spawningState) || error::is_null(remote))
-    {
-        TASK_FINISH_RETURN(task);
-    }
+    else if (error::is_null({remoteItem, spawningState, remote})) { TASK_FINISH_RETURN(task); }
 
     {
         const char *filename     = path.get_filename();
@@ -483,7 +474,7 @@ static void auto_backup(sys::ProgressTask *task, BackupMenuState::TaskData taskD
     data::TitleInfo *titleInfo     = taskData->titleInfo;
     const FsSaveDataInfo *saveInfo = taskData->saveInfo;
     fslib::Path &target            = taskData->path;
-    if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo)) { return; }
+    if (error::is_null({user, titleInfo, saveInfo})) { return; }
 
     {
         fs::ScopedSaveMount testMount{fs::DEFAULT_SAVE_MOUNT, saveInfo, false};
@@ -534,7 +525,7 @@ static bool read_and_process_meta(const fslib::Path &targetDir, BackupMenuState:
     data::TitleInfo *titleInfo     = taskData->titleInfo;
     const FsSaveDataInfo *saveInfo = taskData->saveInfo;
     if (error::is_null(task)) { return false; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo)) { return false; }
+    else if (error::is_null({user, titleInfo, saveInfo})) { return false; }
 
     const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
     {
@@ -571,7 +562,7 @@ static bool read_and_process_meta(fs::MiniUnzip &unzip, BackupMenuState::TaskDat
     data::User *user               = taskData->user;
     data::TitleInfo *titleInfo     = taskData->titleInfo;
     const FsSaveDataInfo *saveInfo = taskData->saveInfo;
-    if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo)) { return false; }
+    if (error::is_null({user, titleInfo, saveInfo})) { return false; }
 
     const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
     {

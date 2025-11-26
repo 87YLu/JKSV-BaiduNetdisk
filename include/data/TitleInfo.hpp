@@ -118,5 +118,9 @@ namespace data
 
             /// @brief Private function to get/create the path safe title.
             void get_create_path_safe_title() noexcept;
+
+            /// @brief Checks and returns whether or not a US English or GB English title exists.
+            /// @param titleOut Pointer to pointer to store title pointer.
+            bool get_english_title(const char **titleOut) const noexcept;
     };
 } // namespace data

@@ -21,6 +21,14 @@ namespace
     constexpr const char *APP_ID_HEX_FORMAT = "%016llX";
 }
 
+//                      ---- Construction ----
+
+config::ConfigContext::ConfigContext()
+{
+    // This will default value everything.
+    ConfigContext::initialize();
+}
+
 //                      ---- Public functions ----
 
 void config::ConfigContext::create_directory()
@@ -32,32 +40,33 @@ void config::ConfigContext::create_directory()
     error::fslib(fslib::create_directories_recursively(configDir));
 }
 
-void config::ConfigContext::reset()
+void config::ConfigContext::initialize()
 {
-    m_workingDirectory                                        = PATH_DEFAULT_WORK_DIR;
-    m_configMap[config::keys::INCLUDE_DEVICE_SAVES.data()]    = 0;
-    m_configMap[config::keys::AUTO_BACKUP_ON_RESTORE.data()]  = 1;
-    m_configMap[config::keys::AUTO_NAME_BACKUPS.data()]       = 0;
-    m_configMap[config::keys::AUTO_UPLOAD.data()]             = 0;
-    m_configMap[config::keys::KEEP_LOCAL_BACKUPS.data()]      = 0;
-    m_configMap[config::keys::USE_TITLE_IDS.data()]           = 0;
-    m_configMap[config::keys::HOLD_FOR_DELETION.data()]       = 1;
-    m_configMap[config::keys::HOLD_FOR_RESTORATION.data()]    = 1;
-    m_configMap[config::keys::HOLD_FOR_OVERWRITE.data()]      = 1;
-    m_configMap[config::keys::ONLY_LIST_MOUNTABLE.data()]     = 1;
-    m_configMap[config::keys::LIST_ACCOUNT_SYS_SAVES.data()]  = 0;
-    m_configMap[config::keys::ALLOW_WRITING_TO_SYSTEM.data()] = 0;
-    m_configMap[config::keys::EXPORT_TO_ZIP.data()]           = 1;
-    m_configMap[config::keys::ZIP_COMPRESSION_LEVEL.data()]   = 6;
-    m_configMap[config::keys::TITLE_SORT_TYPE.data()]         = 0;
-    m_configMap[config::keys::JKSM_TEXT_MODE.data()]          = 0;
-    m_configMap[config::keys::FORCE_ENGLISH.data()]           = 0;
-    m_configMap[config::keys::SHOW_DEVICE_USER.data()]        = 1;
-    m_configMap[config::keys::SHOW_BCAT_USER.data()]          = 0;
-    m_configMap[config::keys::SHOW_CACHE_USER.data()]         = 0;
-    m_configMap[config::keys::SHOW_SYSTEM_USER.data()]        = 0;
-    m_configMap[config::keys::ENABLE_TRASH_BIN.data()]        = 0;
-    m_animationScaling                                        = DEFAULT_SCALING;
+    m_workingDirectory                                 = PATH_DEFAULT_WORK_DIR;
+    m_configMap[config::keys::INCLUDE_DEVICE_SAVES]    = 0;
+    m_configMap[config::keys::AUTO_BACKUP_ON_RESTORE]  = 1;
+    m_configMap[config::keys::AUTO_NAME_BACKUPS]       = 0;
+    m_configMap[config::keys::AUTO_UPLOAD]             = 0;
+    m_configMap[config::keys::KEEP_LOCAL_BACKUPS]      = 0;
+    m_configMap[config::keys::USE_TITLE_IDS]           = 0;
+    m_configMap[config::keys::ENGLISH_SAFE_TITLES]     = 0;
+    m_configMap[config::keys::HOLD_FOR_DELETION]       = 1;
+    m_configMap[config::keys::HOLD_FOR_RESTORATION]    = 1;
+    m_configMap[config::keys::HOLD_FOR_OVERWRITE]      = 1;
+    m_configMap[config::keys::ONLY_LIST_MOUNTABLE]     = 1;
+    m_configMap[config::keys::LIST_ACCOUNT_SYS_SAVES]  = 0;
+    m_configMap[config::keys::ALLOW_WRITING_TO_SYSTEM] = 0;
+    m_configMap[config::keys::EXPORT_TO_ZIP]           = 1;
+    m_configMap[config::keys::ZIP_COMPRESSION_LEVEL]   = 6;
+    m_configMap[config::keys::TITLE_SORT_TYPE]         = 0;
+    m_configMap[config::keys::JKSM_TEXT_MODE]          = 0;
+    m_configMap[config::keys::FORCE_ENGLISH]           = 0;
+    m_configMap[config::keys::SHOW_DEVICE_USER]        = 1;
+    m_configMap[config::keys::SHOW_BCAT_USER]          = 0;
+    m_configMap[config::keys::SHOW_CACHE_USER]         = 0;
+    m_configMap[config::keys::SHOW_SYSTEM_USER]        = 0;
+    m_configMap[config::keys::ENABLE_TRASH_BIN]        = 0;
+    m_animationScaling                                 = DEFAULT_SCALING;
 }
 
 bool config::ConfigContext::load()
@@ -196,10 +205,11 @@ bool config::ConfigContext::load_config_file()
         const char *key    = json_object_iter_peek_name(&configIter);
         json_object *value = json_object_iter_peek_value(&configIter);
 
-        const bool workDir   = std::strcmp(key, config::keys::WORKING_DIRECTORY.data()) == 0;
-        const bool scaling   = std::strcmp(key, config::keys::UI_ANIMATION_SCALE.data()) == 0;
-        const bool favorites = std::strcmp(key, config::keys::FAVORITES.data()) == 0;
-        const bool blacklist = std::strcmp(key, config::keys::BLACKLIST.data()) == 0;
+        // These keys require special handling.
+        const bool workDir   = key == config::keys::WORKING_DIRECTORY;
+        const bool scaling   = key == config::keys::UI_ANIMATION_SCALE;
+        const bool favorites = key == config::keys::FAVORITES;
+        const bool blacklist = key == config::keys::BLACKLIST;
 
         if (workDir) { m_workingDirectory = json_object_get_string(value); }
         else if (scaling) { m_animationScaling = json_object_get_double(value); }

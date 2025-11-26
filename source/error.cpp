@@ -49,14 +49,40 @@ bool error::is_null(const void *pointer, const std::source_location &location) n
     return true;
 }
 
+bool error::is_null(std::initializer_list<const void *> pointers, const std::source_location &location) noexcept
+{
+    // Loop through the list. Using index so the error logged can be tracked.
+    int index{};
+    for (const void *pointer : pointers)
+    {
+        // If it's null, log and return true.
+        if (!pointer)
+        {
+            std::string_view file{}, function{};
+            prep_locations(file, function, location);
+            logger::log("%s::%s::%u::%u::nullptr{%i}!",
+                        file.data(),
+                        function.data(),
+                        location.line(),
+                        location.column(),
+                        index);
+
+            return true;
+        }
+        ++index;
+    }
+    // Nothing was null.
+    return false;
+}
+
 static void prep_locations(std::string_view &file, std::string_view &function, const std::source_location &location) noexcept
 {
     file     = location.file_name();
     function = location.function_name();
 
-    size_t fileBegin = file.find_last_of('/');
+    const size_t fileBegin = file.find_last_of('/');
     if (fileBegin != file.npos) { file = file.substr(fileBegin + 1); }
 
-    size_t functionBegin = function.find_first_of(' ');
+    const size_t functionBegin = function.find_first_of(' ');
     if (functionBegin != function.npos) { function = function.substr(functionBegin + 1); }
 }

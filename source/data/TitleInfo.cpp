@@ -4,6 +4,7 @@
 #include "error.hpp"
 #include "graphics/colors.hpp"
 #include "graphics/gfxutil.hpp"
+#include "logging/logger.hpp"
 #include "stringutil.hpp"
 
 #include <cstring>
@@ -83,6 +84,7 @@ int64_t data::TitleInfo::get_save_data_size(uint8_t saveType) const noexcept
         case FsSaveDataType_Temporary: return nacp.temporary_storage_size;
         case FsSaveDataType_Cache:     return nacp.cache_storage_size;
     }
+
     return 0;
 }
 
@@ -97,6 +99,7 @@ int64_t data::TitleInfo::get_save_data_size_max(uint8_t saveType) const noexcept
         case FsSaveDataType_Temporary: return nacp.temporary_storage_size;
         case FsSaveDataType_Cache:     return std::max(nacp.cache_storage_size, nacp.cache_storage_data_and_journal_size_max);
     }
+
     return 0;
 }
 
@@ -111,6 +114,7 @@ int64_t data::TitleInfo::get_journal_size(uint8_t saveType) const noexcept
         case FsSaveDataType_Temporary: return nacp.temporary_storage_size;
         case FsSaveDataType_Cache:     return nacp.cache_storage_journal_size;
     }
+
     return 0;
 }
 
@@ -127,6 +131,7 @@ int64_t data::TitleInfo::get_journal_size_max(uint8_t saveType) const noexcept
         case FsSaveDataType_Cache:
             return std::max(nacp.cache_storage_journal_size, nacp.cache_storage_data_and_journal_size_max);
     }
+
     return 0;
 }
 
@@ -140,6 +145,7 @@ bool data::TitleInfo::has_save_data_type(uint8_t saveType) const noexcept
         case FsSaveDataType_Device:  return nacp.device_save_data_size > 0 || nacp.device_save_data_size_max > 0;
         case FsSaveDataType_Cache:   return nacp.cache_storage_size > 0 || nacp.cache_storage_data_and_journal_size_max > 0;
     }
+
     return false;
 }
 
@@ -175,14 +181,52 @@ void data::TitleInfo::load_icon()
 
 void data::TitleInfo::get_create_path_safe_title() noexcept
 {
+    // Check if the title has a custom output path instead.
     const bool hasCustom = config::has_custom_path(m_applicationID);
     if (hasCustom)
     {
+        // Read it into our local buffer.
         config::get_custom_path(m_applicationID, m_pathSafeTitle, TitleInfo::SIZE_PATH_SAFE);
         return;
     }
 
+    // This is whether or not to use the title ID. It's used to bypass the English check.
     const bool useTitleId = config::get_by_key(config::keys::USE_TITLE_IDS);
-    const bool sanitized  = !useTitleId && stringutil::sanitize_string_for_path(m_entry->name, m_pathSafeTitle, SIZE_PATH_SAFE);
+    const bool useEnglish = config::get_by_key(config::keys::ENGLISH_SAFE_TITLES);
+
+    // Grab the English title in case it's needed.
+    const char *englishTitle{};
+    const bool hasEnglish = TitleInfo::get_english_title(&englishTitle);
+
+    // Final condition for override.
+    const bool englishSafeTitle = useEnglish && hasEnglish;
+
+    // This is our final string to use.
+    const char *safeTarget = englishSafeTitle ? englishTitle : m_entry->name;
+
+    const bool sanitized = !useTitleId && stringutil::sanitize_string_for_path(safeTarget, m_pathSafeTitle, SIZE_PATH_SAFE);
     if (useTitleId || !sanitized) { std::snprintf(m_pathSafeTitle, TitleInfo::SIZE_PATH_SAFE, "%016lX", m_applicationID); }
+}
+
+bool data::TitleInfo::get_english_title(const char **titleOut) const noexcept
+{
+    // These are the indexes for the english titles.
+    static constexpr uint8_t ENUS_INDEX = 0;
+    static constexpr uint8_t ENGB_INDEX = 1;
+
+    // Grab the pointers to them.
+    const char *enUs = m_data.nacp.lang[ENUS_INDEX].name;
+    const char *enGb = m_data.nacp.lang[ENGB_INDEX].name;
+
+    // If they're both empty, return false.
+    if (enUs[0] == 0x00 && enGb[0] == 0x00) { return false; }
+
+    // Get the length. Assign whichever is longer.
+    const size_t enUsLength = std::char_traits<char>::length(enUs);
+    const size_t enGbLength = std::char_traits<char>::length(enGb);
+
+    // Assign whichever is longer. EnUS wins on match.
+    *titleOut = enUsLength >= enGbLength ? enUs : enGb;
+
+    return true;
 }

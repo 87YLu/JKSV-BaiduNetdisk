@@ -19,7 +19,7 @@ void tasks::savecreate::create_save_data_for(sys::threadpool::JobData taskData)
     const uint16_t saveIndex = isCache ? castData->saveDataIndex : 0;
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(spawningState)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, titleInfo, spawningState})) { TASK_FINISH_RETURN(task); }
 
     const int popTicks       = ui::PopMessageManager::DEFAULT_TICKS;
     const char *statusFormat = strings::get_by_name(strings::names::USEROPTION_STATUS, 0);
@@ -57,7 +57,7 @@ void tasks::savecreate::create_save_data_for_sd(sys::threadpool::JobData taskDat
     const uint16_t saveIndex = isCache ? castData->saveDataIndex : 0;
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(spawningState)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, titleInfo, spawningState})) { TASK_FINISH_RETURN(task); }
 
     const int popTicks       = ui::PopMessageManager::DEFAULT_TICKS;
     const char *statusFormat = strings::get_by_name(strings::names::USEROPTION_STATUS, 0);

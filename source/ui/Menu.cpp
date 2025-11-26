@@ -170,7 +170,6 @@ void ui::Menu::initialize_sounds()
     static constexpr const char *CURSOR_PATH      = "romfs:/Sound/MenuCursor.wav";
 
     if (sm_cursor) { return; }
-
     sm_cursor = sdl::SoundManager::load(CURSOR_NAME, CURSOR_PATH);
 }
 
@@ -198,6 +197,7 @@ void ui::Menu::handle_input()
     const bool wrapEnd   = upPressed && m_selected - 1 < 0;
     const bool wrapBegin = downPressed && m_selected + 1 >= optionsSize;
 
+    // This is used to tell whether or not to play the sound.
     const int previousSelected = m_selected;
 
     if (wrapEnd) { m_selected = optionsSize - 1; }
@@ -217,17 +217,28 @@ void ui::Menu::handle_input()
 
 void ui::Menu::update_scrolling()
 {
+    // Get the option count. Bail if the menu isn't long enough to need scrolling.
     const int optionsSize = m_options.size();
     if (optionsSize <= m_maxDisplayOptions) { return; }
 
+    // This is where scrolling menu down (or upward) ends.
     const int endScrollPoint = optionsSize - (m_maxDisplayOptions - m_scrollLength);
-    const int scrolledItems  = m_selected - m_scrollLength;
 
+    // This is the total number of items scrolled passed the length where scrolling needs to occur.
+    const int scrolledItems = m_selected - m_scrollLength;
+
+    // This is our updated target.
     int targetY{};
+    // We need this for comparison later.
     const int previousTarget = m_transition.get_target_y();
+
     if (m_selected < m_scrollLength) { targetY = m_originalY; } // Don't bother. There's no point.
+    // If the selected index is passed the point where we stop scrolling, set it to the position where we need to stop to keep
+    // the menu in place.
     else if (m_selected >= endScrollPoint) { targetY = m_originalY - (optionsSize - m_maxDisplayOptions) * m_optionHeight; }
+    // If the selected option is passed our scrolling length, calculate the new target.
     else if (m_selected >= m_scrollLength) { targetY = m_originalY - (scrolledItems * m_optionHeight); }
 
+    // If our current target doesn't match the previous, update the target.
     if (targetY != previousTarget) { m_transition.set_target_y(targetY); }
 }

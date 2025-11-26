@@ -13,13 +13,14 @@ namespace config
     class ConfigContext
     {
         public:
-            ConfigContext() = default;
+            /// @brief Constructor. Initializes the map with default values.
+            ConfigContext();
 
             /// @brief Ensures the config directory exists.
             void create_directory();
 
             /// @brief Resets and saves the config back to the default values.
-            void reset();
+            void initialize();
 
             /// @brief Loads the config and custom paths files from the SD card if possible.
             bool load();
@@ -82,23 +83,8 @@ namespace config
             void get_custom_path(uint64_t applicationID, char *buffer, size_t bufferSize);
 
         private:
-            /// @brief These allow unordered_map with string key and string_view finds.
-            // clang-format off
-            struct StringViewHash
-            {
-                using is_transparent = void;
-                size_t operator() (std::string_view view) const noexcept { return std::hash<std::string_view>{}(view); }
-            };
-
-            struct StringViewEqual
-            {
-                using is_transparent = void;
-                bool operator() (std::string_view viewA, std::string_view viewB) const noexcept { return viewA == viewB; }
-            };
-            // clang-format on
-
             /// @brief This is where the majority of the config values are.
-            std::unordered_map<std::string, uint8_t, StringViewHash, StringViewEqual> m_configMap{};
+            std::unordered_map<std::string_view, uint8_t> m_configMap{};
 
             /// @brief The main directory JKSV operates from.
             fslib::Path m_workingDirectory{};

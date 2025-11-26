@@ -10,14 +10,14 @@ namespace
 
 void config::initialize()
 {
-    // This is needed so new config options can be added without invalidating old configurations.
-    s_context.reset();
-
+    // Ensure the directory actually exists.
     s_context.create_directory();
+
+    // This will load the config if the file is found.
     s_context.load();
 }
 
-void config::reset_to_default() { s_context.reset(); }
+void config::reset_to_default() { s_context.initialize(); }
 
 void config::save() { s_context.save(); }
 
@@ -39,9 +39,7 @@ void config::add_remove_favorite(uint64_t applicationID)
 {
     const bool favorite = s_context.is_favorite(applicationID);
     if (favorite) { s_context.remove_favorite(applicationID); }
-    else {
-        s_context.add_favorite(applicationID);
-    }
+    else { s_context.add_favorite(applicationID); }
 }
 
 bool config::is_favorite(uint64_t applicationID) noexcept { return s_context.is_favorite(applicationID); }
@@ -50,9 +48,7 @@ void config::add_remove_blacklist(uint64_t applicationID)
 {
     const bool blacklisted = s_context.is_blacklisted(applicationID);
     if (blacklisted) { s_context.remove_from_blacklist(applicationID); }
-    else {
-        s_context.add_to_blacklist(applicationID);
-    }
+    else { s_context.add_to_blacklist(applicationID); }
 }
 
 void config::get_blacklisted_titles(std::vector<uint64_t> &listOut) { s_context.get_blacklist(listOut); }

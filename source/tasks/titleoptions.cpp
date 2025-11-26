@@ -22,11 +22,7 @@ void tasks::titleoptions::blacklist_title(sys::threadpool::JobData taskData)
     TitleOptionState *spawningState = castData->spawningState;
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(titleInfo) || error::is_null(spawningState))
-    {
-        task->complete();
-        return;
-    }
+    else if (error::is_null({titleInfo, spawningState})) { TASK_FINISH_RETURN(task); }
 
     const uint64_t applicationID = titleInfo->get_application_id();
     config::add_remove_blacklist(applicationID);
@@ -89,7 +85,7 @@ void tasks::titleoptions::delete_all_remote_backups_for_title(sys::threadpool::J
     remote::Storage *remote    = remote::get_remote_storage();
 
     if (error::is_null(task)) { return; }
-    else if (error::is_null(titleInfo) || error::is_null(remote)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({titleInfo, remote})) { TASK_FINISH_RETURN(task); }
 
     const char *title                  = titleInfo->get_title();
     const std::string_view remoteTitle = remote->supports_utf8() ? titleInfo->get_title() : titleInfo->get_path_safe_title();
@@ -146,7 +142,7 @@ void tasks::titleoptions::reset_save_data(sys::threadpool::JobData taskData)
     data::TitleInfo *titleInfo     = castData->titleInfo;
     const FsSaveDataInfo *saveInfo = castData->saveInfo;
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, titleInfo, saveInfo})) { TASK_FINISH_RETURN(task); }
 
     const int popTicks     = ui::PopMessageManager::DEFAULT_TICKS;
     const char *popFailed  = strings::get_by_name(strings::names::TITLEOPTION_POPS, 2);
@@ -181,11 +177,7 @@ void tasks::titleoptions::delete_save_data_from_system(sys::threadpool::JobData 
     TitleSelectCommon *titleSelect  = castData->titleSelect;
     TitleOptionState *spawningState = castData->spawningState;
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo) || error::is_null(titleSelect) ||
-             error::is_null(spawningState))
-    {
-        TASK_FINISH_RETURN(task);
-    }
+    else if (error::is_null({user, titleInfo, saveInfo, titleSelect, spawningState})) { TASK_FINISH_RETURN(task); }
 
     const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
     {
@@ -220,7 +212,7 @@ void tasks::titleoptions::extend_save_data(sys::threadpool::JobData taskData)
     data::TitleInfo *titleInfo     = castData->titleInfo;
     const FsSaveDataInfo *saveInfo = castData->saveInfo;
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(titleInfo) || error::is_null(saveInfo)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, titleInfo, saveInfo})) { TASK_FINISH_RETURN(task); }
 
     std::array<char, 5> sizeBuffer = {0};
     FsSaveDataExtraData extraData{};

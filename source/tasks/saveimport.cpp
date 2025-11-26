@@ -129,7 +129,7 @@ static bool test_for_save(data::User *user, const fs::SaveMetaData &saveMeta)
 
 static bool create_save_data_from_meta(sys::ProgressTask *task, data::User *user, const fs::SaveMetaData &saveMeta)
 {
-    if (error::is_null(task) || error::is_null(user)) { return false; }
+    if (error::is_null({task, user})) { return false; }
 
     // Gonna borrow this.
     const char *statusFormat = strings::get_by_name(strings::names::USEROPTION_STATUS, 0);

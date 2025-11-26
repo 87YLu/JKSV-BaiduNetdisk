@@ -72,7 +72,7 @@ void tasks::useroptions::backup_all_for_user_remote(sys::threadpool::JobData tas
     data::User *user        = castData->user;
     remote::Storage *remote = remote::get_remote_storage();
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(remote)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, remote})) { TASK_FINISH_RETURN(task); }
 
     auto backupStruct      = std::make_shared<BackupMenuState::DataStruct>();
     backupStruct->task     = task;
@@ -122,7 +122,7 @@ void tasks::useroptions::create_all_save_data_for_user(sys::threadpool::JobData 
     data::User *user               = castData->user;
     UserOptionState *spawningState = castData->spawningState;
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(spawningState)) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, spawningState})) { TASK_FINISH_RETURN(task); }
 
     data::TitleInfoList infoList{};
     data::get_title_info_list(infoList);
@@ -162,7 +162,7 @@ void tasks::useroptions::delete_all_save_data_for_user(sys::threadpool::JobData 
     data::User *user               = castData->user;
     UserOptionState *spawningState = castData->spawningState;
     if (error::is_null(task)) { return; }
-    else if (error::is_null(user) || error::is_null(spawningState) || user->get_account_save_type() == FsSaveDataType_System)
+    else if (error::is_null({user, spawningState}) || user->get_account_save_type() == FsSaveDataType_System)
     {
         TASK_FINISH_RETURN(task);
     }

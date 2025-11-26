@@ -19,24 +19,14 @@
 
 namespace
 {
-    // All of these states share the same render target.
+    /// @brief Name of the target all "secondary" states share.
     constexpr std::string_view SECONDARY_TARGET = "SecondaryTarget";
 
+    /// @brief This is used to place "NULL" keys in our local array
     constexpr std::string_view CONFIG_KEY_NULL = "NULL";
 
-    enum
-    {
-        CHANGE_WORK_DIR = 0,
-        EDIT_BLACKLIST  = 1,
-        CYCLE_ZIP       = 15,
-        CYCLE_SORT_TYPE = 16,
-        TOGGLE_JKSM     = 17,
-        TOGGLE_TRASH    = 23,
-        CYCLE_SCALING   = 24
-    };
-
-    // This is needed to be able to get and set keys by index. Anything "NULL" isn't a key that can be easily toggled.
-    constexpr std::array<std::string_view, 25> CONFIG_KEY_ARRAY = {CONFIG_KEY_NULL,
+    /// @brief This makes it easier to work with key indexes. Anything NULL is something that is not easily toggled.
+    constexpr std::array<std::string_view, 26> CONFIG_KEY_ARRAY = {CONFIG_KEY_NULL,
                                                                    CONFIG_KEY_NULL,
                                                                    config::keys::INCLUDE_DEVICE_SAVES,
                                                                    config::keys::AUTO_BACKUP_ON_RESTORE,
@@ -44,6 +34,7 @@ namespace
                                                                    config::keys::AUTO_UPLOAD,
                                                                    config::keys::KEEP_LOCAL_BACKUPS,
                                                                    config::keys::USE_TITLE_IDS,
+                                                                   config::keys::ENGLISH_SAFE_TITLES,
                                                                    config::keys::HOLD_FOR_DELETION,
                                                                    config::keys::HOLD_FOR_RESTORATION,
                                                                    config::keys::HOLD_FOR_OVERWRITE,
@@ -61,6 +52,19 @@ namespace
                                                                    config::keys::SHOW_SYSTEM_USER,
                                                                    config::keys::ENABLE_TRASH_BIN,
                                                                    CONFIG_KEY_NULL};
+
+    /// @brief These are the indexes used for case indexing.
+    enum CaseIndexes
+    {
+        ChangeWorkDir = 0,
+        EditBlacklist = 1,
+        CycleZip      = 16,
+        CycleSortType = 17,
+        ToggleJKSM    = 18,
+        ToggleTrash   = 24,
+        CycleScaling  = 25
+    };
+
 } // namespace
 
 //                      ---- Construction ----
@@ -110,7 +114,8 @@ void SettingsState::render()
 
 void SettingsState::load_settings_menu()
 {
-    for (int i = 0; const char *option = strings::get_by_name(strings::names::SETTINGS_MENU, i); i++)
+    const char *option{};
+    for (int i = 0; (option = strings::get_by_name(strings::names::SETTINGS_MENU, i)); i++)
     {
         m_settingsMenu->add_option(option);
     }
@@ -118,17 +123,16 @@ void SettingsState::load_settings_menu()
 
 void SettingsState::load_extra_strings()
 {
-    for (int i = 0; const char *onOff = strings::get_by_name(strings::names::ON_OFF, i); i++) { m_onOff[i] = onOff; }
-    for (int i = 0; const char *sortType = strings::get_by_name(strings::names::SORT_TYPES, i); i++)
-    {
-        m_sortTypes[i] = sortType;
-    }
+    const char *onOff{}, *sortType{};
+    for (int i = 0; (onOff = strings::get_by_name(strings::names::ON_OFF, i)); i++) { m_onOff[i] = onOff; }
+    for (int i = 0; (sortType = strings::get_by_name(strings::names::SORT_TYPES, i)); i++) { m_sortTypes[i] = sortType; }
 }
 
 void SettingsState::update_menu_options()
 {
-    static constexpr std::array<int, 20> TOGGLE_INDEXES = {2,  3,  4,  5,  6,  7,  8,  9,  10, 11,
-                                                           12, 13, 14, 17, 18, 19, 20, 21, 22, 23};
+    // These are the indexes that are a really simple toggle.
+    static constexpr std::array<int, 21> TOGGLE_INDEXES = {2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
+                                                           13, 14, 15, 18, 19, 20, 21, 22, 23, 24};
 
     for (const int index : TOGGLE_INDEXES)
     {
@@ -140,25 +144,25 @@ void SettingsState::update_menu_options()
     }
 
     {
-        const char *zipCompFormat   = strings::get_by_name(strings::names::SETTINGS_MENU, CYCLE_ZIP);
-        const uint8_t zipLevel      = config::get_by_key(CONFIG_KEY_ARRAY[CYCLE_ZIP]);
+        const char *zipCompFormat   = strings::get_by_name(strings::names::SETTINGS_MENU, CaseIndexes::CycleZip);
+        const uint8_t zipLevel      = config::get_by_key(CONFIG_KEY_ARRAY[CaseIndexes::CycleZip]);
         const std::string zipOption = stringutil::get_formatted_string(zipCompFormat, zipLevel);
-        m_settingsMenu->edit_option(CYCLE_ZIP, zipOption);
+        m_settingsMenu->edit_option(CaseIndexes::CycleZip, zipOption);
     }
 
     {
-        const char *titleSortFormat      = strings::get_by_name(strings::names::SETTINGS_MENU, CYCLE_SORT_TYPE);
-        const uint8_t sortType           = config::get_by_key(CONFIG_KEY_ARRAY[CYCLE_SORT_TYPE]);
+        const char *titleSortFormat      = strings::get_by_name(strings::names::SETTINGS_MENU, CaseIndexes::CycleSortType);
+        const uint8_t sortType           = config::get_by_key(CONFIG_KEY_ARRAY[CaseIndexes::CycleSortType]);
         const char *typeText             = SettingsState::get_sort_type_text(sortType);
         const std::string sortTypeOption = stringutil::get_formatted_string(titleSortFormat, typeText);
-        m_settingsMenu->edit_option(CYCLE_SORT_TYPE, sortTypeOption);
+        m_settingsMenu->edit_option(CaseIndexes::CycleSortType, sortTypeOption);
     }
 
     {
-        const char *scalingFormat       = strings::get_by_name(strings::names::SETTINGS_MENU, CYCLE_SCALING);
+        const char *scalingFormat       = strings::get_by_name(strings::names::SETTINGS_MENU, CaseIndexes::CycleScaling);
         const double scaling            = config::get_animation_scaling();
         const std::string scalingOption = stringutil::get_formatted_string(scalingFormat, scaling);
-        m_settingsMenu->edit_option(CYCLE_SCALING, scalingOption);
+        m_settingsMenu->edit_option(CaseIndexes::CycleScaling, scalingOption);
     }
 }
 
@@ -169,8 +173,8 @@ void SettingsState::change_working_directory()
     const char *popSuccessFormat = strings::get_by_name(strings::names::SETTINGS_POPS, 1);
     const char *popFailed        = strings::get_by_name(strings::names::SETTINGS_POPS, 2);
 
-    const fslib::Path oldPath                = config::get_working_directory();
     std::array<char, FS_MAX_PATH> pathBuffer = {0};
+    const fslib::Path oldPath                = config::get_working_directory();
 
     const bool input =
         keyboard::get_input(SwkbdType_Normal, oldPath.string().c_str(), inputHeader, pathBuffer.data(), FS_MAX_PATH);
@@ -190,9 +194,7 @@ void SettingsState::change_working_directory()
         moved = fs::move_directory_recursively(oldPath, newPath);
         error::fslib(fslib::delete_directory_recursively(oldPath));
     }
-    else {
-        moved = fslib::rename_directory(oldPath, newPath);
-    }
+    else { moved = fslib::rename_directory(oldPath, newPath); }
 
     if (!moved)
     {
@@ -228,14 +230,14 @@ void SettingsState::toggle_options()
 
     switch (selected)
     {
-        case CHANGE_WORK_DIR: SettingsState::change_working_directory(); break;
-        case EDIT_BLACKLIST:  SettingsState::create_push_blacklist_edit(); break;
-        case CYCLE_ZIP:       SettingsState::cycle_zip_level(); break;
-        case CYCLE_SORT_TYPE: SettingsState::cycle_sort_type(); break;
-        case TOGGLE_JKSM:     SettingsState::toggle_jksm_mode(); break;
-        case TOGGLE_TRASH:    SettingsState::toggle_trash_folder(); break;
-        case CYCLE_SCALING:   SettingsState::cycle_anim_scaling(); break;
-        default:              config::toggle_by_key(CONFIG_KEY_ARRAY[selected]); break;
+        case CaseIndexes::ChangeWorkDir: SettingsState::change_working_directory(); break;
+        case CaseIndexes::EditBlacklist: SettingsState::create_push_blacklist_edit(); break;
+        case CaseIndexes::CycleZip:      SettingsState::cycle_zip_level(); break;
+        case CaseIndexes::CycleSortType: SettingsState::cycle_sort_type(); break;
+        case CaseIndexes::ToggleJKSM:    SettingsState::toggle_jksm_mode(); break;
+        case CaseIndexes::ToggleTrash:   SettingsState::toggle_trash_folder(); break;
+        case CaseIndexes::CycleScaling:  SettingsState::cycle_anim_scaling(); break;
+        default:                         config::toggle_by_key(CONFIG_KEY_ARRAY[selected]); break;
     }
 
     SettingsState::update_menu_options();
@@ -290,9 +292,7 @@ void SettingsState::toggle_trash_folder()
     config::toggle_by_key(config::keys::ENABLE_TRASH_BIN);
 
     if (trashEnabled) { error::fslib(fslib::delete_directory_recursively(trashPath)); }
-    else {
-        error::fslib(fslib::create_directory(trashPath));
-    }
+    else { error::fslib(fslib::create_directory(trashPath)); }
 }
 
 void SettingsState::cycle_anim_scaling()
