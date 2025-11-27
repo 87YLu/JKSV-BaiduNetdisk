@@ -614,7 +614,9 @@ bool remote::GoogleDrive::request_listing()
     url.append_parameter("fields", "nextPageToken,files(name,id,size,parents,mimeType)")
         .append_parameter("orderBy", "name_natural")
         .append_parameter("pageSize", "256")
-        .append_parameter("trashed", "false");
+        .append_parameter("q", "trashed%3Dfalse"); // This might not be the best way to do this...
+
+    logger::log("%s", url.get());
 
     std::string response;
     curl::prepare_get(m_curl);
