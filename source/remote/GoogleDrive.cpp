@@ -616,8 +616,6 @@ bool remote::GoogleDrive::request_listing()
         .append_parameter("pageSize", "256")
         .append_parameter("q", "trashed%3Dfalse"); // This might not be the best way to do this...
 
-    logger::log("%s", url.get());
-
     std::string response;
     curl::prepare_get(m_curl);
     curl::set_option(m_curl, CURLOPT_HTTPHEADER, header.get());
