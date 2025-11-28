@@ -1,7 +1,6 @@
 #include "JKSV.hpp"
 
 #include "StateManager.hpp"
-#include "appstates/AppletModeState.hpp"
 #include "appstates/FileModeState.hpp"
 #include "appstates/MainMenuState.hpp"
 #include "appstates/TaskState.hpp"
@@ -91,9 +90,6 @@ JKSV::JKSV()
     JKSV::create_directories();
     sys::threadpool::initialize(); // This is the thread pool so JKSV isn't constantly creating and destroying threads.
 
-    // To do: Rearrange init so JKSV doesn't init so much.
-    if (JKSV::applet_mode_check()) { return; }
-
     // Push the remote init.
     sys::threadpool::push_job(remote::initialize, nullptr);
 
@@ -103,6 +99,9 @@ JKSV::JKSV()
 
     // This isn't required, but why not?
     FadeState::create_and_push(colors::BLACK, 0xFF, 0x00, nullptr);
+
+    // Push this warning so people can't complain if JKSV runs out of RAM.
+    JKSV::applet_mode_warning();
 
     // JKSV is now running.
     sm_isRunning = true;
@@ -221,21 +220,6 @@ bool JKSV::create_directories()
     return true;
 }
 
-bool JKSV::applet_mode_check() noexcept
-{
-    // Determine whether or not we're running as and application. If we are, return false.
-    const bool appletMode = appletGetAppletType() != AppletType_Application;
-    if (!appletMode) { return false; }
-
-    // We are running as an applet. Push the state.
-    StateManager::push_state(AppletModeState::create());
-
-    // Set this to running.
-    sm_isRunning = true;
-
-    return true;
-}
-
 void JKSV::add_color_chars()
 {
     sdl::text::add_color_character(L'#', colors::BLUE);
@@ -254,6 +238,20 @@ void JKSV::setup_translation_info_strings()
     m_showTranslationInfo         = std::char_traits<char>::compare(author, "NULL", 4) != 0; // This is whether or not to show.
     m_translationInfo             = stringutil::get_formatted_string(translationFormat, author);
     m_buildString = stringutil::get_formatted_string("v. %02d.%02d.%04d", builddate::MONTH, builddate::DAY, builddate::YEAR);
+}
+
+void JKSV::applet_mode_warning() noexcept
+{
+    // This hangs longer than other pop messages.
+    static constexpr int APPLET_TICKS = 5000;
+
+    // Anything that doesn't register as an application is an applet as far as I'm concerned.
+    const bool isApplet = appletGetAppletType() != AppletType_Application;
+    if (!isApplet) { return; }
+
+    // Get the string and push the pop message.
+    const char *appletString = strings::get_by_name(strings::names::APPLET_MODE, 0);
+    ui::PopMessageManager::push_message(APPLET_TICKS, appletString);
 }
 
 void JKSV::render_base()

@@ -1,6 +1,6 @@
 {
     "AppletMode": [
-        "0: JKSV ne prend plus en charge l’exécution dans des applets comme l’album.\n\nRelancez JKSV après avoir démarré un jeu ou une application en maintenant [R].\n\nAppuyez sur [+] pour quitter."
+        "0: *Attention* : Mode applet détecté. Un comportement inattendu peut se produire !"
     ],
     "BackupMenu": [
         "0: Nouvelle sauvegarde"

@@ -1,6 +1,6 @@
 {
     "AppletMode": [
-        "0: JKSV ondersteunt het uitvoeren onder applets zoals het album niet meer.\n\nStart JKSV opnieuw nadat je een spel of applicatie hebt gestart terwijl je [R] ingedrukt houdt.\n\nDruk op [+] om af te sluiten."
+        "0: *Waarschuwing*: Applet-modus gedetecteerd. Onverwacht gedrag kan optreden!"
     ],
     "BackupMenu": [
         "0: Nieuwe back-up"

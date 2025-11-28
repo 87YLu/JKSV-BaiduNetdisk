@@ -1,5 +1,6 @@
 #include "remote/GoogleDrive.hpp"
 
+#include "error.hpp"
 #include "logging/logger.hpp"
 #include "remote/Form.hpp"
 #include "remote/URL.hpp"
@@ -54,33 +55,21 @@ remote::GoogleDrive::GoogleDrive()
 
     // Load the json file.
     json::Object clientJson = json::new_object(json_object_from_file, remote::PATH_GOOGLE_DRIVE_CONFIG.data());
-    if (!clientJson)
-    {
-        logger::log(STRING_ERROR_READING_CONFIG, "Error reading configuration file!");
-        return;
-    }
+    if (!clientJson) { return; }
 
     json_object *installed = json::get_object(clientJson, JSON_KEY_INSTALLED);
-    if (!installed)
-    {
-        logger::log(STRING_ERROR_READING_CONFIG, "Configuration file is malformed!");
-        return;
-    }
+    if (error::is_null(installed)) { return; }
 
     json_object *clientId     = json_object_object_get(installed, JSON_KEY_CLIENT_ID);
     json_object *clientSecret = json_object_object_get(installed, JSON_KEY_CLIENT_SECRET);
     json_object *refreshToken = json_object_object_get(installed, JSON_KEY_REFRESH_TOKEN);
-    if (!clientId || !clientSecret)
-    {
-        logger::log(STRING_ERROR_READING_CONFIG, "Configuration file is missing required data!");
-        return;
-    }
+    if (error::is_null({clientId, clientSecret})) { return; }
     // Grab them.
     m_clientId     = json_object_get_string(clientId);
     m_clientSecret = json_object_get_string(clientSecret);
 
     // Returning here will make is_initialized return false.
-    if (!refreshToken) { return; }
+    if (error::is_null(refreshToken)) { return; }
     m_refreshToken = json_object_get_string(refreshToken);
 
     if (!GoogleDrive::refresh_token())
@@ -134,7 +123,7 @@ bool remote::GoogleDrive::create_directory(std::string_view name)
 
     // This is all I really need from the response.
     json_object *id = json::get_object(parser, JSON_KEY_ID);
-    if (!id)
+    if (error::is_null(id))
     {
         // This doesn't really mean the request wasn't successful. It just means the new directory couldn't be appended
         // to the list...
@@ -220,7 +209,7 @@ bool remote::GoogleDrive::upload_file(const fslib::Path &source, std::string_vie
 
     json_object *id       = json::get_object(responseParser, JSON_KEY_ID);
     json_object *filename = json::get_object(responseParser, JSON_KEY_NAME);
-    if (!id || !filename)
+    if (error::is_null({id, filename}))
     {
         logger::log("Error uploading file: server response is missing data required.");
         return false;
@@ -441,7 +430,7 @@ bool remote::GoogleDrive::get_sign_in_data(std::string &message, std::string &co
     json_object *expiresIn       = json::get_object(parser, "expires_in");
     json_object *interval        = json::get_object(parser, "interval");
     // These are required and fatal.
-    if (!deviceCode || !userCode || !verificationUrl || !expiresIn || !interval)
+    if (error::is_null({deviceCode, userCode, verificationUrl, expiresIn, interval}))
     {
         logger::log(STRING_SIGN_IN_ERROR, "Malformed response.");
         return false;
@@ -492,7 +481,7 @@ bool remote::GoogleDrive::poll_sign_in(std::string_view code)
     json_object *expiresIn    = json::get_object(parser, JSON_KEY_EXPIRES_IN);
     json_object *refreshToken = json::get_object(parser, JSON_KEY_REFRESH_TOKEN);
     // All of these are required.
-    if (!accessToken || !expiresIn || !refreshToken)
+    if (error::is_null({accessToken, expiresIn, refreshToken}))
     {
         logger::log(STRING_ERROR_POLLING, "Malformed response or missing data!");
         return false;
@@ -512,8 +501,8 @@ bool remote::GoogleDrive::poll_sign_in(std::string_view code)
         json_object *refreshToken = json_object_new_string(m_refreshToken.c_str());
         json_object_object_add(installed, JSON_KEY_REFRESH_TOKEN, refreshToken);
 
-        fslib::File configFile(remote::PATH_GOOGLE_DRIVE_CONFIG, FsOpenMode_Create | FsOpenMode_Write);
-        if (configFile) { configFile << json_object_get_string(config.get()); }
+        fslib::File configFile{remote::PATH_GOOGLE_DRIVE_CONFIG, FsOpenMode_Create | FsOpenMode_Write};
+        if (configFile.is_open()) { configFile << json_object_get_string(config.get()); }
     }
 
     if (!GoogleDrive::get_root_id()) { return false; }
@@ -548,7 +537,7 @@ bool remote::GoogleDrive::get_root_id()
     if (!parser) { return false; }
 
     json_object *rootId = json::get_object(parser, "rootFolderId");
-    if (!rootId)
+    if (error::is_null(rootId))
     {
         logger::log("Error getting drive root directory ID!");
         return false;
@@ -594,7 +583,7 @@ bool remote::GoogleDrive::refresh_token()
     // These are the only things I care about.
     json_object *accessToken = json::get_object(parser, JSON_KEY_ACCESS_TOKEN);
     json_object *expiresIn   = json::get_object(parser, JSON_KEY_EXPIRES_IN);
-    if (!accessToken || !expiresIn) { return false; }
+    if (error::is_null({accessToken, expiresIn})) { return false; }
 
     m_token        = json_object_get_string(accessToken);
     m_tokenExpires = std::time(NULL) + json_object_get_uint64(expiresIn);
@@ -614,7 +603,7 @@ bool remote::GoogleDrive::request_listing()
     url.append_parameter("fields", "nextPageToken,files(name,id,size,parents,mimeType)")
         .append_parameter("orderBy", "name_natural")
         .append_parameter("pageSize", "256")
-        .append_parameter("q", "trashed%3Dfalse"); // This might not be the best way to do this...
+        .append_parameter("q", "trashed%3Dfalse"); // This works, but could get messy if more parameters are added.
 
     std::string response;
     curl::prepare_get(m_curl);
@@ -633,7 +622,7 @@ bool remote::GoogleDrive::request_listing()
         json::Object parser = json::new_object(json_tokener_parse, response.c_str());
         if (!parser || GoogleDrive::error_occurred(parser) || !GoogleDrive::process_listing(parser))
         {
-            logger::log("Error while parseing Google Drive response!");
+            logger::log("Error while parsing Google Drive response!");
             return false;
         }
 
@@ -667,7 +656,7 @@ bool remote::GoogleDrive::process_listing(json::Object &json)
         json_object *id       = json_object_object_get(currentFile, JSON_KEY_ID);
         json_object *name     = json_object_object_get(currentFile, JSON_KEY_NAME);
         json_object *size     = json_object_object_get(currentFile, "size");
-        if (!mimeType || !parents || !id || !name)
+        if (error::is_null({mimeType, parents, id, name}))
         {
             logger::log(STRING_ERROR_PROCESSING, "Malformed or missing data!");
             continue;
@@ -675,7 +664,7 @@ bool remote::GoogleDrive::process_listing(json::Object &json)
 
         // I still think it's stupid this is an array when there can only be one...
         json_object *parent = json_object_array_get_idx(parents, 0);
-        if (!parent)
+        if (error::is_null(parent))
         {
             logger::log(STRING_ERROR_PROCESSING, "Missing parent ID!");
             continue;

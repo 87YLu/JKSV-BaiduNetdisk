@@ -1,6 +1,6 @@
 {
     "AppletMode": [
-        "0: JKSV no longer supports running under applets such as the album.\n\nRun JKSV again after starting a game or application while holding [R].\n\nPress [+] to exit."
+        "0: *Warning*: Applet mode detected. Unexpected behavior may occur!"
     ],
     "BackupMenu": [
         "0: New Backup"

@@ -1,6 +1,6 @@
 {
     "AppletMode": [
-        "0: O JKSV já não suporta ser executado em applets como o álbum.\n\nExecute novamente o JKSV depois de iniciar um jogo ou aplicação enquanto mantém [R] pressionado.\n\nPrima [+] para sair."
+        "0: *Aviso*: Modo applet detectado. Comportamento inesperado pode ocorrer!"
     ],
     "BackupMenu": [
         "0: Novo Backup"
