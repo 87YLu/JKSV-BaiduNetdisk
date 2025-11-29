@@ -4,7 +4,7 @@
 #include "data/data.hpp"
 #include "error.hpp"
 #include "fs/fs.hpp"
-#include "keyboard.hpp"
+#include "keyboard/keyboard.hpp"
 #include "logging/logger.hpp"
 #include "remote/remote.hpp"
 #include "strings/strings.hpp"

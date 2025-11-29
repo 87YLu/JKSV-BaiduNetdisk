@@ -10,7 +10,7 @@
 #include "fslib.hpp"
 #include "graphics/colors.hpp"
 #include "input.hpp"
-#include "keyboard.hpp"
+#include "keyboard/keyboard.hpp"
 #include "logging/logger.hpp"
 #include "strings/strings.hpp"
 #include "stringutil.hpp"

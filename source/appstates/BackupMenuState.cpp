@@ -10,7 +10,7 @@
 #include "fslib.hpp"
 #include "graphics/colors.hpp"
 #include "input.hpp"
-#include "keyboard.hpp"
+#include "keyboard/keyboard.hpp"
 #include "sdl.hpp"
 #include "strings/strings.hpp"
 #include "stringutil.hpp"
@@ -274,8 +274,19 @@ void BackupMenuState::name_and_create_backup()
         std::snprintf(name, SIZE_NAME_LENGTH, "%s - %s", nickname, date.c_str());
     }
 
+    // Doing thing like this so the strings don't linger.
+    keyboard::Dictionary dictionary{};
+    {
+        const std::string dateA = stringutil::get_date_string();
+        const std::string dateB = stringutil::get_date_string(stringutil::DateFormat::YearDayMonth);
+        const std::string user  = m_user->get_path_safe_nickname();
+
+        dictionary.add_list({dateA, dateB, user, ".zip"});
+    }
+
     const char *keyboardHeader = strings::get_by_name(strings::names::KEYBOARD, 0);
-    const bool named = autoNamed || keyboard::get_input(SwkbdType_QWERTY, name, keyboardHeader, name, SIZE_NAME_LENGTH);
+    const bool named =
+        autoNamed || keyboard::get_input(SwkbdType_QWERTY, name, keyboardHeader, name, SIZE_NAME_LENGTH, dictionary);
     if (!named) { return; }
 
     m_dataStruct->killTask = true;                              // Need to make sure these kill the task.

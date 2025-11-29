@@ -11,7 +11,7 @@
 #include "fslib.hpp"
 #include "graphics/colors.hpp"
 #include "input.hpp"
-#include "keyboard.hpp"
+#include "keyboard/keyboard.hpp"
 #include "logging/logger.hpp"
 #include "remote/remote.hpp"
 #include "strings/strings.hpp"

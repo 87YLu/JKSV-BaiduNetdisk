@@ -6,7 +6,7 @@
 #include "error.hpp"
 #include "fs/fs.hpp"
 #include "input.hpp"
-#include "keyboard.hpp"
+#include "keyboard/keyboard.hpp"
 #include "logging/logger.hpp"
 #include "strings/strings.hpp"
 #include "stringutil.hpp"

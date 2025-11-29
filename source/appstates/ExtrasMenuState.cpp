@@ -6,7 +6,7 @@
 #include "error.hpp"
 #include "graphics/colors.hpp"
 #include "input.hpp"
-#include "keyboard.hpp"
+#include "keyboard/keyboard.hpp"
 #include "strings/strings.hpp"
 #include "ui/PopMessageManager.hpp"
 

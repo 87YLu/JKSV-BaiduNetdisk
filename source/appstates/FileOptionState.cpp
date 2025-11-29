@@ -9,7 +9,7 @@
 #include "fs/fs.hpp"
 #include "fslib.hpp"
 #include "input.hpp"
-#include "keyboard.hpp"
+#include "keyboard/keyboard.hpp"
 #include "logging/logger.hpp"
 #include "mathutil.hpp"
 #include "strings/strings.hpp"
