@@ -170,15 +170,6 @@ std::string stringutil::get_date_string(stringutil::DateFormat format)
     return returnString;
 }
 
-std::string stringutil::generate_abbreviated_title(std::string_view title)
-{
-    size_t space = title.find_first_of(' ');
-    // Don't bother.
-    if (title.empty() || space == title.npos) { return {}; }
-
-    //
-}
-
 static const std::unordered_map<uint32_t, std::string_view> &get_replacement_table()
 {
     static const std::unordered_map<uint32_t, std::string_view> replacementTable = {

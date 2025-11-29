@@ -1,5 +1,6 @@
 #pragma once
 #include <initializer_list>
+#include <span>
 #include <string>
 #include <switch.h>
 #include <vector>
@@ -29,8 +30,11 @@ namespace keyboard
             /// @brief Constructs a new dictionary using the list passed.
             Dictionary(std::initializer_list<std::string_view> wordList);
 
+            /// @brief Helper function to add word to the internal list to cut down on repetition.
+            void add_word_to_list(std::string_view word);
+
             /// @brief Adds the list to the internal list.
-            void add_list(std::initializer_list<std::string_view> wordList);
+            void add_list_to_list(std::initializer_list<std::string_view> wordList);
 
             /// @brief Returns the number of words in the internal list.
             size_t get_count() const noexcept;
