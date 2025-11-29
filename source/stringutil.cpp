@@ -110,30 +110,73 @@ bool stringutil::sanitize_string_for_path(const char *stringIn, char *stringOut,
 
 std::string stringutil::get_date_string(stringutil::DateFormat format)
 {
+    // This is the size of the buffer used for C functions.
     static constexpr size_t STRING_BUFFER_SIZE = 0x80;
 
-    char stringBuffer[STRING_BUFFER_SIZE] = {0};
-
+    // Grab local system time.
     std::time_t timer{};
     std::time(&timer);
     const std::tm localTime = *std::localtime(&timer);
 
+    // String to return
+    std::string returnString{};
+
     switch (format)
     {
+        case stringutil::DateFormat::Year_Month_Day:
+        {
+            // These are like this because the final one needs a character stripped from the string to be safe.
+            char buffer[STRING_BUFFER_SIZE]{};
+            std::strftime(buffer, STRING_BUFFER_SIZE, "%Y-%m-%d_%H-%M-%S", &localTime);
+            returnString = buffer;
+        }
+        break;
+
+        case stringutil::DateFormat::Year_Day_Month:
+        {
+            char buffer[STRING_BUFFER_SIZE]{};
+            std::strftime(buffer, STRING_BUFFER_SIZE, "%Y-%d-%m_%H-%M-%S", &localTime);
+            returnString = buffer;
+        }
+        break;
+
         case stringutil::DateFormat::YearMonthDay:
         {
-            std::strftime(stringBuffer, STRING_BUFFER_SIZE, "%Y-%m-%d_%H-%M-%S", &localTime);
+            char buffer[STRING_BUFFER_SIZE]{};
+            std::strftime(buffer, STRING_BUFFER_SIZE, "%Y%d%m_%H%M%S", &localTime);
+            returnString = buffer;
         }
         break;
 
         case stringutil::DateFormat::YearDayMonth:
         {
-            std::strftime(stringBuffer, STRING_BUFFER_SIZE, "%Y-%d-%m_%H-%M-%S", &localTime);
+            char buffer[STRING_BUFFER_SIZE]{};
+            std::strftime(buffer, STRING_BUFFER_SIZE, "%Y%m%d_%H%M%S", &localTime);
+            returnString = buffer;
+        }
+        break;
+
+        case stringutil::DateFormat::AscTime:
+        {
+            // Just assign to asctime.
+            returnString = std::asctime(&localTime);
+            // Strip the colons.
+            stringutil::replace_in_string(returnString, ":", "-");
+            stringutil::strip_character('\n', returnString);
         }
         break;
     }
 
-    return std::string(stringBuffer);
+    return returnString;
+}
+
+std::string stringutil::generate_abbreviated_title(std::string_view title)
+{
+    size_t space = title.find_first_of(' ');
+    // Don't bother.
+    if (title.empty() || space == title.npos) { return {}; }
+
+    //
 }
 
 static const std::unordered_map<uint32_t, std::string_view> &get_replacement_table()

@@ -40,7 +40,7 @@ INCLUDES	:=	include ./Libraries/FsLib/Switch/FsLib/include ./Libraries/SDLLib/SD
 EXEFS_SRC	:=	exefs_src
 APP_TITLE   :=  JKSV
 APP_AUTHOR  :=  JK
-APP_VERSION :=  11.16.2025
+APP_VERSION :=  11.29.2025
 ROMFS	    :=	romfs
 ICON		:=	icon.jpg
 

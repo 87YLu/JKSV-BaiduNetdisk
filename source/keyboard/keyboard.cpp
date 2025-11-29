@@ -16,18 +16,10 @@ bool keyboard::get_input(SwkbdType keyboardType,
 
     // Cache instead of repeated calls.
     const bool hasDictionary = dictionary.has_value();
+    const size_t wordCount   = hasDictionary ? dictionary->get().get_count() : 0;
 
-    // This changes whether or not we're passed a dictionary here.
-    bool createError{};
-    if (hasDictionary)
-    {
-        // Getting this out of the optional looks confusing...
-        const size_t wordCount = dictionary->get().get_count();
-        createError            = error::libnx(swkbdCreate(&keyboard, wordCount));
-    }
-    else { createError = error::libnx(swkbdCreate(&keyboard, 0)); }
-
-    // Just return false if we can't init the keyboard.
+    // If this fails, immediately return false.
+    const bool createError = error::libnx(swkbdCreate(&keyboard, wordCount));
     if (createError) { return false; }
 
     // Standard swkbd init.
@@ -46,6 +38,9 @@ bool keyboard::get_input(SwkbdType keyboardType,
         const SwkbdDictWord *words = reinterpret_cast<const SwkbdDictWord *>(dictionary->get().get_words());
         const size_t wordCount     = dictionary->get().get_count();
 
+        // Set the flags.
+        swkbdConfigSetDicFlag(&keyboard, 1);
+        // Add our word dictionary.
         swkbdConfigSetDictionary(&keyboard, words, wordCount);
     }
 

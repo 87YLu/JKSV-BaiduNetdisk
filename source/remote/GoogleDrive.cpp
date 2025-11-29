@@ -51,8 +51,6 @@ namespace
 remote::GoogleDrive::GoogleDrive()
     : Storage("[GD]", true)
 {
-    static constexpr const char *STRING_ERROR_READING_CONFIG = "Error reading Google Drive config: %s";
-
     // Load the json file.
     json::Object clientJson = json::new_object(json_object_from_file, remote::PATH_GOOGLE_DRIVE_CONFIG.data());
     if (!clientJson) { return; }

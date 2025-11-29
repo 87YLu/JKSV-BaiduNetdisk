@@ -274,14 +274,21 @@ void BackupMenuState::name_and_create_backup()
         std::snprintf(name, SIZE_NAME_LENGTH, "%s - %s", nickname, date.c_str());
     }
 
-    // Doing thing like this so the strings don't linger.
+    // Doing this like this so the strings don't linger.
     keyboard::Dictionary dictionary{};
     {
-        const std::string dateA = stringutil::get_date_string();
-        const std::string dateB = stringutil::get_date_string(stringutil::DateFormat::YearDayMonth);
-        const std::string user  = m_user->get_path_safe_nickname();
+        // Start with all available date formats.
+        const std::string dateA = stringutil::get_date_string(stringutil::DateFormat::Year_Month_Day);
+        const std::string dateB = stringutil::get_date_string(stringutil::DateFormat::Year_Day_Month);
+        const std::string dateC = stringutil::get_date_string(stringutil::DateFormat::YearMonthDay);
+        const std::string dateD = stringutil::get_date_string(stringutil::DateFormat::YearDayMonth);
+        const std::string dateE = stringutil::get_date_string(stringutil::DateFormat::AscTime);
 
-        dictionary.add_list({dateA, dateB, user, ".zip"});
+        // Path safe nickname.
+        const std::string user = m_user->get_path_safe_nickname();
+
+        // Add them before continuing.
+        dictionary.add_list({dateA, dateB, dateC, dateD, dateE, user, STRING_ZIP_EXT});
     }
 
     const char *keyboardHeader = strings::get_by_name(strings::names::KEYBOARD, 0);
