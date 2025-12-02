@@ -13,7 +13,11 @@
 
 namespace
 {
+    // This is used in various places for appending and checking.
     constexpr const char *STRING_ZIP_EXT = ".zip";
+
+    // I got tired of typing out the DEFAULT_TICKS.
+    constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
 }
 
 // Definitions at bottom.
@@ -90,9 +94,6 @@ void tasks::backup::create_new_backup_remote(sys::threadpool::JobData taskData)
     // This is the temporary name for the backup.
     static constexpr const char *BACKUP_PATH = "sdmc:/jksv_backup.zip";
 
-    // I get tired of typing out the entire variable.
-    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
-
     // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
@@ -168,8 +169,6 @@ void tasks::backup::create_new_backup_remote(sys::threadpool::JobData taskData)
 
 void tasks::backup::overwrite_backup_local(sys::threadpool::JobData taskData)
 {
-    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
-
     // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
@@ -205,9 +204,6 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
 {
     // This is the temporary path for patch backups.
     static constexpr const char *PATCH_PATH = "sdmc:/jksv_patch.zip";
-
-    // I get tired of typing out the full thing.
-    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
 
     // Cast.
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
@@ -265,8 +261,6 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
 
 void tasks::backup::restore_backup_local(sys::threadpool::JobData taskData)
 {
-    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
-
     // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
@@ -361,9 +355,6 @@ void tasks::backup::restore_backup_remote(sys::threadpool::JobData taskData)
 {
     // Download path.
     static constexpr const char *DOWNLOAD_PATH = "sdmc:/jksv_download.zip";
-
-    // Tired of typing. Tired of typing this comment too.
-    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
 
     // Cast.
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
@@ -466,8 +457,6 @@ void tasks::backup::restore_backup_remote(sys::threadpool::JobData taskData)
 
 void tasks::backup::delete_backup_local(sys::threadpool::JobData taskData)
 {
-    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
-
     // Cast.
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
@@ -543,7 +532,6 @@ void tasks::backup::delete_backup_remote(sys::threadpool::JobData taskData)
     if (error::is_null(task)) { return; }
     else if (error::is_null({target, spawningState, remote})) { TASK_FINISH_RETURN(task); }
 
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
     {
         const char *targetName     = target->get_name().data();
         const char *statusTemplate = strings::get_by_name(strings::names::IO_STATUSES, 3);
@@ -555,7 +543,7 @@ void tasks::backup::delete_backup_remote(sys::threadpool::JobData taskData)
     if (!deleted)
     {
         const char *popFailed = strings::get_by_name(strings::names::BACKUPMENU_POPS, 4);
-        ui::PopMessageManager::push_message(popTicks, popFailed);
+        ui::PopMessageManager::push_message(POP_TICKS, popFailed);
     }
 
     spawningState->refresh();
@@ -564,16 +552,27 @@ void tasks::backup::delete_backup_remote(sys::threadpool::JobData taskData)
 
 void tasks::backup::upload_backup(sys::threadpool::JobData taskData)
 {
+    // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task        = static_cast<sys::ProgressTask *>(castData->task);
-    const fslib::Path &path        = castData->path;
-    BackupMenuState *spawningState = castData->spawningState;
-    remote::Storage *remote        = remote::get_remote_storage();
+    // Upack.
+    // Task
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
 
+    // FS
+    const fslib::Path &path = castData->path;
+
+    // State
+    BackupMenuState *spawningState = castData->spawningState;
+
+    // Remote
+    remote::Storage *remote = remote::get_remote_storage();
+
+    // Invalid, bail.
     if (error::is_null(task)) { return; }
     else if (error::is_null({spawningState, remote})) { TASK_FINISH_RETURN(task); }
 
+    // Scoped status update.
     {
         const char *filename     = path.get_filename();
         const char *statusFormat = strings::get_by_name(strings::names::IO_STATUSES, 5);
@@ -582,23 +581,42 @@ void tasks::backup::upload_backup(sys::threadpool::JobData taskData)
     }
 
     // The backup menu should've made sure the remote is pointing to the correct location.
-    remote->upload_file(path, path.get_filename(), task);
+    const bool uploaded = remote->upload_file(path, path.get_filename(), task);
+    if (!uploaded)
+    {
+        // We're going to pop the error, but not return since we're at the end of the function anyway.
+        const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 10);
+        ui::PopMessageManager::push_message(POP_TICKS, popError);
+    }
+
     spawningState->refresh();
     task->complete();
 }
 
 void tasks::backup::patch_backup(sys::threadpool::JobData taskData)
 {
+    // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task        = static_cast<sys::ProgressTask *>(castData->task);
-    const fslib::Path &path        = castData->path;
-    remote::Item *remoteItem       = castData->remoteItem;
+    // Unpack
+    // Task
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
+
+    // FS
+    const fslib::Path &path = castData->path;
+
+    // Remote
+    remote::Item *remoteItem = castData->remoteItem;
+    remote::Storage *remote  = remote::get_remote_storage();
+
+    // State.
     BackupMenuState *spawningState = castData->spawningState;
-    remote::Storage *remote        = remote::get_remote_storage();
+
+    // Invalid, bail.
     if (error::is_null(task)) { return; }
     else if (error::is_null({remoteItem, spawningState, remote})) { TASK_FINISH_RETURN(task); }
 
+    // Status.
     {
         const char *filename     = path.get_filename();
         const char *statusFormat = strings::get_by_name(strings::names::IO_STATUSES, 5);
@@ -625,6 +643,11 @@ static void auto_backup(sys::ProgressTask *task, BackupMenuState::TaskData taskD
     // Remote
     remote::Storage *remote = remote::get_remote_storage();
 
+    // Config
+    const bool autoUpload = config::get_by_key(config::keys::AUTO_UPLOAD);
+    const bool exportZip  = config::get_by_key(config::keys::EXPORT_TO_ZIP);
+    const bool zip        = autoUpload || exportZip;
+
     // Invalid, bail.
     if (error::is_null(task)) { return; }
     else if (error::is_null({user, titleInfo, saveInfo}) || !path.is_valid()) { return; }
@@ -636,18 +659,16 @@ static void auto_backup(sys::ProgressTask *task, BackupMenuState::TaskData taskD
         if (!scopedMount.is_open() || !hasData) { return; }
     }
 
-    const bool autoUpload = config::get_by_key(config::keys::AUTO_UPLOAD);
-    const bool exportZip  = config::get_by_key(config::keys::EXPORT_TO_ZIP);
-    const bool zip        = autoUpload || exportZip;
-
+    // Generate the backup name.
     const char *safeNickname     = user->get_path_safe_nickname();
     const std::string dateString = stringutil::get_date_string();
     std::string backupName       = stringutil::get_formatted_string("AUTO - %s - %s", safeNickname, dateString.c_str());
     if (zip) { backupName += STRING_ZIP_EXT; }
 
+    // Tell the backup function it shouldn't kill the task.
     taskData->killTask = false;
 
-    // Store and swap the path.
+    // Store and swap the path so we don't lose the original.
     fslib::Path originalPath = std::move(path);
     path                     = basePath / backupName;
 
@@ -667,70 +688,88 @@ static void auto_backup(sys::ProgressTask *task, BackupMenuState::TaskData taskD
 
 static bool read_and_process_meta(const fslib::Path &targetDir, BackupMenuState::TaskData taskData, sys::ProgressTask *task)
 {
+    // Unpack.
+    // Data
     data::User *user               = taskData->user;
     data::TitleInfo *titleInfo     = taskData->titleInfo;
     const FsSaveDataInfo *saveInfo = taskData->saveInfo;
+
+    // Invalid, bail.
     if (error::is_null(task)) { return false; }
     else if (error::is_null({user, titleInfo, saveInfo})) { return false; }
 
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
+    // Update status.
     {
         const char *statusProcessing = strings::get_by_name(strings::names::BACKUPMENU_STATUS, 0);
         task->set_status(statusProcessing);
     }
 
+    // Target meta path.
     const fslib::Path metaPath{targetDir / fs::NAME_SAVE_META};
+
+    // Attempt to open file.
     fslib::File metaFile{metaPath, FsOpenMode_Read};
     if (!metaFile.is_open())
     {
         const char *popErrorProcessing = strings::get_by_name(strings::names::BACKUPMENU_POPS, 16);
-        ui::PopMessageManager::push_message(popTicks, popErrorProcessing);
+        ui::PopMessageManager::push_message(POP_TICKS, popErrorProcessing);
+
         return false;
     }
 
+    // Read meta and try to process it.
     fs::SaveMetaData metaData{};
     const bool metaRead  = metaFile.read(&metaData, fs::SIZE_SAVE_META) <= fs::SIZE_SAVE_META;
     const bool processed = metaRead && fs::process_save_meta_data(saveInfo, metaData);
     if (!metaRead || !processed)
     {
         const char *popErrorProcessing = strings::get_by_name(strings::names::BACKUPMENU_POPS, 11);
-        ui::PopMessageManager::push_message(popTicks, popErrorProcessing);
+        ui::PopMessageManager::push_message(POP_TICKS, popErrorProcessing);
+
         return false;
     }
 
+    // If we made it here, it probably might've worked.
     return true;
 }
 
 static bool read_and_process_meta(fs::MiniUnzip &unzip, BackupMenuState::TaskData taskData, sys::ProgressTask *task)
 {
-    if (error::is_null(task)) { return false; }
-
+    // Unpack.
+    // Data.
     data::User *user               = taskData->user;
     data::TitleInfo *titleInfo     = taskData->titleInfo;
     const FsSaveDataInfo *saveInfo = taskData->saveInfo;
-    if (error::is_null({user, titleInfo, saveInfo})) { return false; }
 
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
+    // Invalid, bail.
+    if (error::is_null(task)) { return false; }
+    else if (error::is_null({user, titleInfo, saveInfo})) { return false; }
+
+    // Status
     {
         const char *statusProcessing = strings::get_by_name(strings::names::BACKUPMENU_STATUS, 0);
         task->set_status(statusProcessing);
     }
 
+    // Try to open and read the meta file in the zip.
     fs::SaveMetaData saveMeta{};
     const bool metaFound = unzip.locate_file(fs::NAME_SAVE_META);
     if (!metaFound)
     {
         const char *popNotFound = strings::get_by_name(strings::names::BACKUPMENU_POPS, 16);
-        ui::PopMessageManager::push_message(popTicks, popNotFound);
+        ui::PopMessageManager::push_message(POP_TICKS, popNotFound);
+
         return false;
     }
 
+    // Read & process.
     const bool metaRead      = metaFound && unzip.read(&saveMeta, fs::SIZE_SAVE_META) <= fs::SIZE_SAVE_META;
     const bool metaProcessed = metaRead && fs::process_save_meta_data(saveInfo, saveMeta);
     if (!metaRead || !metaProcessed)
     {
         const char *popErrorProcessing = strings::get_by_name(strings::names::BACKUPMENU_POPS, 11);
-        ui::PopMessageManager::push_message(popTicks, popErrorProcessing);
+        ui::PopMessageManager::push_message(POP_TICKS, popErrorProcessing);
+
         return false;
     }
 
@@ -739,49 +778,59 @@ static bool read_and_process_meta(fs::MiniUnzip &unzip, BackupMenuState::TaskDat
 
 static void write_meta_file(const fslib::Path &target, const FsSaveDataInfo *saveInfo)
 {
-    const int popTicks              = ui::PopMessageManager::DEFAULT_TICKS;
-    const char *popErrorWritingMeta = strings::get_by_name(strings::names::BACKUPMENU_POPS, 8);
+    // This error is used in two places here.
+    const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 8);
 
+    // Get meta for the target save info.
     fs::SaveMetaData saveMeta{};
     const fslib::Path metaPath{target / fs::NAME_SAVE_META};
     const bool hasMeta = fs::fill_save_meta_data(saveInfo, saveMeta);
+
+    // Open for writing.
     fslib::File metaFile{metaPath, FsOpenMode_Create | FsOpenMode_Write, fs::SIZE_SAVE_META};
     if (!metaFile.is_open() || !hasMeta)
     {
-        ui::PopMessageManager::push_message(popTicks, popErrorWritingMeta);
+        ui::PopMessageManager::push_message(POP_TICKS, popError);
         return;
     }
 
+    // Write the meta.
     const bool metaWritten = metaFile.write(&saveMeta, fs::SIZE_SAVE_META) <= fs::SIZE_SAVE_META;
-    if (!metaWritten) { ui::PopMessageManager::push_message(popTicks, popErrorWritingMeta); }
+    if (!metaWritten) { ui::PopMessageManager::push_message(POP_TICKS, popError); }
 }
 
 static void write_meta_zip(fs::MiniZip &zip, const FsSaveDataInfo *saveInfo)
 {
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
-
+    // Get the meta
     fs::SaveMetaData saveMeta{};
-    const bool hasMeta   = fs::fill_save_meta_data(saveInfo, saveMeta);
-    const bool openMeta  = hasMeta && zip.open_new_file(fs::NAME_SAVE_META);
+    const bool hasMeta = fs::fill_save_meta_data(saveInfo, saveMeta);
+
+    // Open it in the zip.
+    const bool openMeta = hasMeta && zip.open_new_file(fs::NAME_SAVE_META);
+
+    // Write it.
     const bool writeMeta = openMeta && zip.write(&saveMeta, fs::SIZE_SAVE_META);
+
+    // Close it.
     const bool closeMeta = openMeta && zip.close_current_file();
+
     if (hasMeta && (!openMeta || !writeMeta || !closeMeta))
     {
-        const char *popErrorWritingMeta = strings::get_by_name(strings::names::BACKUPMENU_POPS, 8);
-        ui::PopMessageManager::push_message(popTicks, popErrorWritingMeta);
+        const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 8);
+        ui::PopMessageManager::push_message(POP_TICKS, popError);
     }
 }
 
 static fs::ScopedSaveMount create_scoped_mount(const FsSaveDataInfo *saveInfo)
 {
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
-
+    // Attempt to open the mount
     fs::ScopedSaveMount saveMount{fs::DEFAULT_SAVE_MOUNT, saveInfo};
     if (!saveMount.is_open())
     {
-
-        const char *popErrorMounting = strings::get_by_name(strings::names::BACKUPMENU_POPS, 14);
-        ui::PopMessageManager::push_message(popTicks, popErrorMounting);
+        const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 14);
+        ui::PopMessageManager::push_message(POP_TICKS, popError);
     }
+
+    // Return it.
     return saveMount;
 }

@@ -53,7 +53,6 @@ bool fs::move_directory_recursively(const fslib::Path &oldPath, const fslib::Pat
     {
         const fslib::Path fullSource{oldPath / entry};
         const fslib::Path fullDest{newPath / entry};
-        logger::log("%s -> %s", fullSource.string().c_str(), fullDest.string().c_str());
 
         if (entry.is_directory())
         {
