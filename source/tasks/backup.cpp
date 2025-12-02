@@ -14,7 +14,6 @@
 namespace
 {
     constexpr const char *STRING_ZIP_EXT = ".zip";
-    constexpr const char *PATH_JKSV_TEMP = "sdmc:/jksvTemp.zip"; // This is named this so if something fails, people know.
 }
 
 // Definitions at bottom.
@@ -27,24 +26,42 @@ static fs::ScopedSaveMount create_scoped_mount(const FsSaveDataInfo *saveInfo);
 
 void tasks::backup::create_new_backup_local(sys::threadpool::JobData taskData)
 {
+    // Cast data to what we actually use.
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task        = static_cast<sys::ProgressTask *>(castData->task);
+    // Unpack to pointers and references for easier access.
+    // Task.
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
+
+    // Data.
     data::User *user               = castData->user;
     data::TitleInfo *titleInfo     = castData->titleInfo;
     const FsSaveDataInfo *saveInfo = castData->saveInfo;
-    const fslib::Path &target      = castData->path;
+
+    // Filesystem/path.
+    const fslib::Path &path = castData->path;
+
+    // State to update.
     BackupMenuState *spawningState = castData->spawningState;
-    const bool killTask            = castData->killTask;
 
+    // Whether or not to signal completion at the end.
+    const bool killTask = castData->killTask;
+
+    // If anything is invalid, bail.
     if (error::is_null(task)) { return; }
-    else if (error::is_null({user, titleInfo, saveInfo})) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, titleInfo, saveInfo}) || !path.is_valid()) { TASK_FINISH_RETURN(task); }
 
-    const std::string targetString = target.string();
-    const bool hasZipExt           = std::strstr(targetString.c_str(), STRING_ZIP_EXT);
+    // Check if the path has the zip extension. Scoped so the string doesn't linger. Not the best way to detect this btw.
+    bool hasZipExt{};
+    {
+        const std::string pathString = path.string();
+        hasZipExt                    = pathString.find(STRING_ZIP_EXT) != pathString.npos;
+    }
+
+    // If it has the zip extension
     if (hasZipExt) // At this point, this should have the zip extension appended if needed.
     {
-        fs::MiniZip zip{target};
+        fs::MiniZip zip{path};
         if (!zip.is_open()) { TASK_FINISH_RETURN(task); }
 
         write_meta_zip(zip, saveInfo);
@@ -53,13 +70,14 @@ void tasks::backup::create_new_backup_local(sys::threadpool::JobData taskData)
     }
     else
     {
-        const bool needsDir    = !fslib::directory_exists(target);
-        const bool createError = needsDir && error::fslib(fslib::create_directory(target));
+        // Create the directory if needed.
+        const bool needsDir    = !fslib::directory_exists(path);
+        const bool createError = needsDir && error::fslib(fslib::create_directory(path));
         if (needsDir && createError) { TASK_FINISH_RETURN(task); }
 
-        write_meta_file(target, saveInfo);
+        write_meta_file(path, saveInfo);
         auto scopedMount = create_scoped_mount(saveInfo);
-        fs::copy_directory(fs::DEFAULT_SAVE_ROOT, target, task);
+        fs::copy_directory(fs::DEFAULT_SAVE_ROOT, path, task);
     }
 
     // This is like this so I can reuse this code.
@@ -69,37 +87,57 @@ void tasks::backup::create_new_backup_local(sys::threadpool::JobData taskData)
 
 void tasks::backup::create_new_backup_remote(sys::threadpool::JobData taskData)
 {
+    // This is the temporary name for the backup.
+    static constexpr const char *BACKUP_PATH = "sdmc:/jksv_backup.zip";
 
+    // I get tired of typing out the entire variable.
+    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
+
+    // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task        = static_cast<sys::ProgressTask *>(castData->task);
+    // Unpack
+    // Task.
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
+
+    // Data.
     data::User *user               = castData->user;
     data::TitleInfo *titleInfo     = castData->titleInfo;
     const FsSaveDataInfo *saveInfo = castData->saveInfo;
-    const fslib::Path &path        = castData->path;
-    const std::string &remoteName  = castData->remoteName;
-    BackupMenuState *spawningState = castData->spawningState;
-    const bool &killTask           = castData->killTask;
-    const bool keepLocal           = config::get_by_key(config::keys::KEEP_LOCAL_BACKUPS);
-    remote::Storage *remote        = remote::get_remote_storage();
 
+    // FS
+    const fslib::Path &path = castData->path;
+
+    // Remote
+    remote::Storage *remote       = remote::get_remote_storage();
+    const std::string &remoteName = castData->remoteName;
+
+    // State.
+    BackupMenuState *spawningState = castData->spawningState;
+
+    // Whether or not to signal.
+    const bool killTask = castData->killTask;
+
+    // Whether or not to keep and move the backup.
+    const bool keepLocal = config::get_by_key(config::keys::KEEP_LOCAL_BACKUPS);
+
+    // Valid check.
     if (error::is_null(task)) { return; }
     else if (error::is_null({user, titleInfo, remote, saveInfo})) { TASK_FINISH_RETURN(task); }
-    {
-        TASK_FINISH_RETURN(task);
-    }
 
-    const fslib::Path zipPath{keepLocal ? path : PATH_JKSV_TEMP};
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
+    // This path is conditional and changes depending on whether or not the keep local option is toggled.
+    const fslib::Path zipPath{keepLocal ? path : BACKUP_PATH};
 
+    // Attempt to open the ZIP.
     fs::MiniZip zip{zipPath};
     if (!zip.is_open())
     {
         const char *popErrorCreating = strings::get_by_name(strings::names::BACKUPMENU_POPS, 5);
-        ui::PopMessageManager::push_message(popTicks, popErrorCreating);
+        ui::PopMessageManager::push_message(POP_TICKS, popErrorCreating);
         TASK_FINISH_RETURN(task);
     }
 
+    // Write meta, backup
     write_meta_zip(zip, saveInfo);
     {
         auto scopedMount = create_scoped_mount(saveInfo);
@@ -107,18 +145,21 @@ void tasks::backup::create_new_backup_remote(sys::threadpool::JobData taskData)
     }
     zip.close();
 
+    // Scoped, update status of the task.
     {
         const char *uploadFormat = strings::get_by_name(strings::names::IO_STATUSES, 5);
         std::string status       = stringutil::get_formatted_string(uploadFormat, remoteName.data());
         task->set_status(status);
     }
 
-    const bool uploaded    = remote->upload_file(zipPath, remoteName, task);
+    // Upload the file.
+    const bool uploaded = remote->upload_file(zipPath, remoteName, task);
+    // Delete if desired.
     const bool deleteError = uploaded && !keepLocal && error::fslib(fslib::delete_file(zipPath));
     if (!uploaded || deleteError)
     {
         const char *popErrorUploading = strings::get_by_name(strings::names::BACKUPMENU_POPS, 10);
-        ui::PopMessageManager::push_message(popTicks, popErrorUploading);
+        ui::PopMessageManager::push_message(POP_TICKS, popErrorUploading);
     }
 
     if (spawningState) { spawningState->refresh(); }
@@ -127,45 +168,73 @@ void tasks::backup::create_new_backup_remote(sys::threadpool::JobData taskData)
 
 void tasks::backup::overwrite_backup_local(sys::threadpool::JobData taskData)
 {
+    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
+
+    // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task   = static_cast<sys::ProgressTask *>(castData->task);
-    const fslib::Path &target = castData->path;
-    if (error::is_null(task)) { return; }
+    // Unpack
+    // Task.
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
 
-    const int popTicks     = ui::PopMessageManager::DEFAULT_TICKS;
-    const bool isDirectory = fslib::directory_exists(target);
-    const bool dirFailed   = isDirectory && error::fslib(fslib::delete_directory_recursively(target));
-    const bool fileFailed  = !isDirectory && error::fslib(fslib::delete_file(target));
+    // FS
+    const fslib::Path &path = castData->path;
+
+    // Bail if invalid.
+    if (error::is_null(task) || !path.is_valid()) { return; }
+
+    // If the backup is a directory, try to delete it. If not, delete the zip.
+    const bool isDirectory = fslib::directory_exists(path);
+    const bool dirFailed   = isDirectory && error::fslib(fslib::delete_directory_recursively(path));
+    const bool fileFailed  = !isDirectory && error::fslib(fslib::delete_file(path));
+    // If deletion of the target backup failed, pop, finish.
     if (dirFailed && fileFailed)
     {
-        const char *popErrorDeleting = strings::get_by_name(strings::names::BACKUPMENU_POPS, 4);
-        ui::PopMessageManager::push_message(popTicks, popErrorDeleting);
+        const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 4);
+        ui::PopMessageManager::push_message(POP_TICKS, popError);
         TASK_FINISH_RETURN(task);
     }
 
+    // Ensure the new backup kills the task.
     castData->killTask = true;
+
     tasks::backup::create_new_backup_local(castData);
 }
 
 void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
 {
+    // This is the temporary path for patch backups.
+    static constexpr const char *PATCH_PATH = "sdmc:/jksv_patch.zip";
+
+    // I get tired of typing out the full thing.
+    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
+
+    // Cast.
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task        = static_cast<sys::ProgressTask *>(castData->task);
-    const FsSaveDataInfo *saveInfo = castData->saveInfo;
-    remote::Item *target           = castData->remoteItem;
-    remote::Storage *remote        = remote::get_remote_storage();
+    // Unpack.
+    // Task.
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
 
+    // Data.
+    const FsSaveDataInfo *saveInfo = castData->saveInfo;
+
+    // Remote.
+    remote::Storage *remote = remote::get_remote_storage();
+    remote::Item *target    = castData->remoteItem;
+
+    // Bail if invalid.
     if (error::is_null(task)) { return; }
     else if (error::is_null({remote, target})) { TASK_FINISH_RETURN(task); }
 
-    const fslib::Path tempPath{PATH_JKSV_TEMP};
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
+    // This is our temporary path to work with.
+    const fslib::Path tempPath{PATCH_PATH};
 
+    // Create the ZIP.
     fs::MiniZip zip{tempPath};
     if (!zip.is_open()) { TASK_FINISH_RETURN(task); }
 
+    // Backup and close.
     write_meta_zip(zip, saveInfo);
     {
         auto scopedMount = create_scoped_mount(saveInfo);
@@ -173,19 +242,22 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
     }
     zip.close();
 
+    // Scoped. Update status to uploading.
     {
         const char *targetName   = target->get_name().data();
         const char *statusFormat = strings::get_by_name(strings::names::IO_STATUSES, 5);
         std::string status       = stringutil::get_formatted_string(statusFormat, targetName);
         task->set_status(status);
     }
+    // Patch the backup.
     remote->patch_file(target, tempPath, task);
 
+    // Delete the temporary local backup.
     const bool deleteError = error::fslib(fslib::delete_file(tempPath));
     if (deleteError)
     {
         const char *popErrorDeleting = strings::get_by_name(strings::names::BACKUPMENU_POPS, 4);
-        ui::PopMessageManager::push_message(popTicks, popErrorDeleting);
+        ui::PopMessageManager::push_message(POP_TICKS, popErrorDeleting);
     }
 
     task->complete();
@@ -193,44 +265,67 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
 
 void tasks::backup::restore_backup_local(sys::threadpool::JobData taskData)
 {
+    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
+
+    // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task        = static_cast<sys::ProgressTask *>(castData->task);
+    // Unpack
+    // Task
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
+
+    // Data
     data::User *user               = castData->user;
     data::TitleInfo *titleInfo     = castData->titleInfo;
     const FsSaveDataInfo *saveInfo = castData->saveInfo;
-    const fslib::Path &target      = castData->path;
+
+    // FS
+    const fslib::Path &path = castData->path;
+
+    // State
     BackupMenuState *spawningState = castData->spawningState;
 
+    // Bail on invalid data.
     if (error::is_null(task)) { return; }
     else if (error::is_null({user, titleInfo, saveInfo, spawningState})) { TASK_FINISH_RETURN(task); }
 
+    // Get the journal size to work with.
     FsSaveDataExtraData extraData{};
     const uint8_t saveType    = saveInfo->save_data_type;
     const bool readExtra      = fs::read_save_extra_data(saveInfo, extraData);
     const int64_t journalSize = readExtra ? extraData.journal_size : titleInfo->get_journal_size(saveType);
 
-    const std::string targetString = target.string();
-    const bool autoBackup          = config::get_by_key(config::keys::AUTO_BACKUP_ON_RESTORE);
-    const bool isDir               = fslib::directory_exists(target);
-    const bool hasZipExt           = std::strstr(targetString.c_str(), STRING_ZIP_EXT);
+    // Whether or not to create an auto-backup.
+    const bool autoBackup = config::get_by_key(config::keys::AUTO_BACKUP_ON_RESTORE);
 
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
+    // Wether or not the backup is a directory.
+    const bool isDir = fslib::directory_exists(path);
+
+    // Wether or not the it's a file and has the zip extension.
+    bool hasZipExt{};
+    {
+        const std::string pathString = path.string();
+        hasZipExt                    = !isDir && pathString.find(STRING_ZIP_EXT) != pathString.npos;
+    }
+
+    // Create the auto-backup.
     if (autoBackup) { auto_backup(task, castData); }
 
+    // Wipe the current save.
     {
         auto scopedMount = create_scoped_mount(saveInfo);
         error::fslib(fslib::delete_directory_recursively(fs::DEFAULT_SAVE_ROOT));
         error::fslib(fslib::commit_data_to_file_system(fs::DEFAULT_SAVE_MOUNT));
     }
 
+    // If it's not a folder and has the zip extension, try to restore as a ZIP.
     if (!isDir && hasZipExt)
     {
-        fs::MiniUnzip unzip{target};
+        fs::MiniUnzip unzip{path};
         if (!unzip.is_open())
         {
             const char *popErrorOpenZip = strings::get_by_name(strings::names::EXTRASMENU_POPS, 7);
-            ui::PopMessageManager::push_message(popTicks, popErrorOpenZip);
+            ui::PopMessageManager::push_message(POP_TICKS, popErrorOpenZip);
             TASK_FINISH_RETURN(task);
         }
 
@@ -240,16 +335,19 @@ void tasks::backup::restore_backup_local(sys::threadpool::JobData taskData)
     }
     else if (isDir)
     {
-        read_and_process_meta(target, castData, task);
+        // Directory restore.
+        read_and_process_meta(path, castData, task);
         auto scopedMount = create_scoped_mount(saveInfo);
-        fs::copy_directory_commit(target, fs::DEFAULT_SAVE_ROOT, journalSize, task);
+        fs::copy_directory_commit(path, fs::DEFAULT_SAVE_ROOT, journalSize, task);
     }
     else
     {
+        // Just copy the file.
         auto scopedMount = create_scoped_mount(saveInfo);
-        fs::copy_file_commit(target, fs::DEFAULT_SAVE_ROOT, journalSize, task);
+        fs::copy_file_commit(path, fs::DEFAULT_SAVE_ROOT, journalSize, task);
     }
 
+    // Signal data was written if it previously wasn't and refresh it.
     if (spawningState)
     {
         spawningState->save_data_written();
@@ -261,53 +359,72 @@ void tasks::backup::restore_backup_local(sys::threadpool::JobData taskData)
 
 void tasks::backup::restore_backup_remote(sys::threadpool::JobData taskData)
 {
+    // Download path.
+    static constexpr const char *DOWNLOAD_PATH = "sdmc:/jksv_download.zip";
+
+    // Tired of typing. Tired of typing this comment too.
+    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
+
+    // Cast.
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::ProgressTask *task        = static_cast<sys::ProgressTask *>(castData->task);
+    // Unpack.
+    // Task
+    sys::ProgressTask *task = static_cast<sys::ProgressTask *>(castData->task);
+
+    // Data.
     data::User *user               = castData->user;
     data::TitleInfo *titleInfo     = castData->titleInfo;
     const FsSaveDataInfo *saveInfo = castData->saveInfo;
+
+    // State.
     BackupMenuState *spawningState = castData->spawningState;
-    remote::Storage *remote        = remote::get_remote_storage();
-    const bool autoBackup          = config::get_by_key(config::keys::AUTO_BACKUP_ON_RESTORE);
 
+    // Remote.
+    remote::Storage *remote    = remote::get_remote_storage();
+    const remote::Item *target = castData->remoteItem;
+
+    // Whether or not an auto backup is needed.
+    const bool autoBackup = config::get_by_key(config::keys::AUTO_BACKUP_ON_RESTORE);
+
+    // Invalid, bail.
     if (error::is_null(task)) { return; }
-    else if (error::is_null({user, titleInfo, saveInfo, remote})) { TASK_FINISH_RETURN(task); }
+    else if (error::is_null({user, titleInfo, saveInfo, remote, target})) { TASK_FINISH_RETURN(task); }
 
-    if (autoBackup) { auto_backup(task, castData); }
+    // Temporary file path for download.
+    const fslib::Path tempPath{DOWNLOAD_PATH};
 
+    // Scoped status update.
     {
-        auto scopedMount = create_scoped_mount(saveInfo);
-        error::fslib(fslib::delete_directory_recursively(fs::DEFAULT_SAVE_ROOT));
-        error::fslib(fslib::commit_data_to_file_system(fs::DEFAULT_SAVE_MOUNT));
-    }
+        const char *targetName   = target->get_name().data();
+        const char *statusFormat = strings::get_by_name(strings::names::IO_STATUSES, 4);
+        std::string status       = stringutil::get_formatted_string(statusFormat, targetName);
 
-    const int popTicks   = ui::PopMessageManager::DEFAULT_TICKS;
-    remote::Item *target = castData->remoteItem;
-    const fslib::Path tempPath{PATH_JKSV_TEMP};
-    {
-        const char *name              = target->get_name().data();
-        const char *downloadingFormat = strings::get_by_name(strings::names::IO_STATUSES, 4);
-        std::string status            = stringutil::get_formatted_string(downloadingFormat, name);
         task->set_status(status);
     }
 
+    // Download the file first. Only continue if it succeeds.
     const bool downloaded = remote->download_file(target, tempPath, task);
     if (!downloaded)
     {
-        const char *popErrorDownloading = strings::get_by_name(strings::names::BACKUPMENU_POPS, 9);
-        ui::PopMessageManager::push_message(popTicks, popErrorDownloading);
+        const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 9);
+        ui::PopMessageManager::push_message(POP_TICKS, popError);
         TASK_FINISH_RETURN(task);
     }
 
+    // Attempt to open the downloaded file. It it fails, don't continue.
     fs::MiniUnzip backup{tempPath};
     if (!backup.is_open())
     {
-        const char *popErrorOpeningZip = strings::get_by_name(strings::names::BACKUPMENU_POPS, 3);
-        ui::PopMessageManager::push_message(popTicks, popErrorOpeningZip);
+        const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 3);
+        ui::PopMessageManager::push_message(POP_TICKS, popError);
         TASK_FINISH_RETURN(task);
     }
 
+    // Create the autobackup.
+    if (autoBackup) { auto_backup(task, castData); }
+
+    // Clear the save container.
     {
         auto scopedMount       = create_scoped_mount(saveInfo);
         const bool deleteError = error::fslib(fslib::delete_directory_recursively(fs::DEFAULT_SAVE_ROOT));
@@ -315,27 +432,32 @@ void tasks::backup::restore_backup_remote(sys::threadpool::JobData taskData)
         if (deleteError || commitError)
         {
             const char *popErrorResetting = strings::get_by_name(strings::names::BACKUPMENU_POPS, 2);
-            ui::PopMessageManager::push_message(popTicks, popErrorResetting);
+            ui::PopMessageManager::push_message(POP_TICKS, popErrorResetting);
             TASK_FINISH_RETURN(task);
         }
     }
 
+    // Read the meta from the backup.
     read_and_process_meta(backup, castData, task);
     {
+        // Get journal size.
         FsSaveDataExtraData extraData{};
         const bool readExtra      = fs::read_save_extra_data(saveInfo, extraData);
         const uint8_t saveType    = user->get_account_save_type();
         const int64_t journalSize = readExtra ? extraData.journal_size : titleInfo->get_journal_size(saveType);
-        fs::ScopedSaveMount saveMount{fs::DEFAULT_SAVE_MOUNT, saveInfo};
+
+        // Temp mount the save, back it up.
+        auto scopedMount = create_scoped_mount(saveInfo);
         fs::copy_zip_to_directory(backup, fs::DEFAULT_SAVE_ROOT, journalSize, task);
     }
     backup.close();
 
+    // Delete the temporary downloaded file.
     const bool deleteError = error::fslib(fslib::delete_file(tempPath));
     if (deleteError)
     {
         const char *popErrorDeleting = strings::get_by_name(strings::names::BACKUPMENU_POPS, 4);
-        ui::PopMessageManager::push_message(popTicks, popErrorDeleting);
+        ui::PopMessageManager::push_message(POP_TICKS, popErrorDeleting);
     }
 
     spawningState->save_data_written();
@@ -344,16 +466,29 @@ void tasks::backup::restore_backup_remote(sys::threadpool::JobData taskData)
 
 void tasks::backup::delete_backup_local(sys::threadpool::JobData taskData)
 {
+    static constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
+
+    // Cast.
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::Task *task                = castData->task;
-    const fslib::Path &path        = castData->path;
+    // Unpack
+    // Task
+    sys::Task *task = castData->task;
+
+    // FS
+    const fslib::Path &path = castData->path;
+
+    // State.
     BackupMenuState *spawningState = castData->spawningState;
 
+    // Config
+    const bool trashEnabled = config::get_by_key(config::keys::ENABLE_TRASH_BIN);
+
+    // Invalid, bail.
     if (error::is_null(task)) { return; }
     else if (error::is_null(spawningState)) { TASK_FINISH_RETURN(task); }
 
-    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
+    // Status. This is basically a flash most of the time.
     {
         const std::string pathString = path.string();
         const char *statusFormat     = strings::get_by_name(strings::names::IO_STATUSES, 3);
@@ -361,8 +496,10 @@ void tasks::backup::delete_backup_local(sys::threadpool::JobData taskData)
         task->set_status(status);
     }
 
-    const bool trashEnabled = config::get_by_key(config::keys::ENABLE_TRASH_BIN);
-    const bool isDir        = fslib::directory_exists(path);
+    // Wether or not the backup is a folder.
+    const bool isDir = fslib::directory_exists(path);
+
+    // These errors are set in the conditions and checked later.
     bool dirError{}, fileError{};
     if (trashEnabled)
     {
@@ -379,7 +516,7 @@ void tasks::backup::delete_backup_local(sys::threadpool::JobData taskData)
     if (dirError || fileError)
     {
         const char *popFailed = strings::get_by_name(strings::names::BACKUPMENU_POPS, 4);
-        ui::PopMessageManager::push_message(popTicks, popFailed);
+        ui::PopMessageManager::push_message(POP_TICKS, popFailed);
     }
 
     spawningState->refresh();
@@ -388,13 +525,21 @@ void tasks::backup::delete_backup_local(sys::threadpool::JobData taskData)
 
 void tasks::backup::delete_backup_remote(sys::threadpool::JobData taskData)
 {
+    // Cast
     auto castData = std::static_pointer_cast<BackupMenuState::DataStruct>(taskData);
 
-    sys::Task *task                = castData->task;
-    remote::Item *target           = castData->remoteItem;
-    BackupMenuState *spawningState = castData->spawningState;
-    remote::Storage *remote        = remote::get_remote_storage();
+    // Unpack
+    // Task
+    sys::Task *task = castData->task;
 
+    // Remote.
+    remote::Storage *remote = remote::get_remote_storage();
+    remote::Item *target    = castData->remoteItem;
+
+    // State
+    BackupMenuState *spawningState = castData->spawningState;
+
+    // Invalid, bail
     if (error::is_null(task)) { return; }
     else if (error::is_null({target, spawningState, remote})) { TASK_FINISH_RETURN(task); }
 
@@ -467,19 +612,28 @@ void tasks::backup::patch_backup(sys::threadpool::JobData taskData)
 
 static void auto_backup(sys::ProgressTask *task, BackupMenuState::TaskData taskData)
 {
-    if (error::is_null(task)) { return; }
-
-    remote::Storage *remote        = remote::get_remote_storage();
+    // Unpack
+    // Data
     data::User *user               = taskData->user;
     data::TitleInfo *titleInfo     = taskData->titleInfo;
     const FsSaveDataInfo *saveInfo = taskData->saveInfo;
-    fslib::Path &target            = taskData->path;
-    if (error::is_null({user, titleInfo, saveInfo})) { return; }
 
+    // FS
+    fslib::Path &path           = taskData->path;
+    const fslib::Path &basePath = *taskData->basePath;
+
+    // Remote
+    remote::Storage *remote = remote::get_remote_storage();
+
+    // Invalid, bail.
+    if (error::is_null(task)) { return; }
+    else if (error::is_null({user, titleInfo, saveInfo}) || !path.is_valid()) { return; }
+
+    // Check if the save actually has data to backup before continuing.
     {
-        fs::ScopedSaveMount testMount{fs::DEFAULT_SAVE_MOUNT, saveInfo, false};
+        auto scopedMount   = create_scoped_mount(saveInfo);
         const bool hasData = fs::directory_has_contents(fs::DEFAULT_SAVE_ROOT);
-        if (!testMount.is_open() || !hasData) { return; }
+        if (!scopedMount.is_open() || !hasData) { return; }
     }
 
     const bool autoUpload = config::get_by_key(config::keys::AUTO_UPLOAD);
@@ -493,30 +647,22 @@ static void auto_backup(sys::ProgressTask *task, BackupMenuState::TaskData taskD
 
     taskData->killTask = false;
 
+    // Store and swap the path.
+    fslib::Path originalPath = std::move(path);
+    path                     = basePath / backupName;
+
     if (autoUpload && remote)
     {
+        // Store this for uploading.
         taskData->remoteName = std::move(backupName);
 
+        // Create the auto backup.
         tasks::backup::create_new_backup_remote(taskData);
     }
-    else
-    {
-        // We're going to get the target dir from the path passed.
-        const size_t lastSlash = target.find_last_of('/');
-        if (lastSlash == target.NOT_FOUND) { return; }
+    else { tasks::backup::create_new_backup_local(taskData); }
 
-        fslib::Path autoTarget{target.sub_path(lastSlash) / backupName};
-
-        // This is used to move and store the path before using the local auto path.
-        fslib::Path storePath = std::move(taskData->path);
-        // Swap em.
-        taskData->path = std::move(autoTarget);
-
-        tasks::backup::create_new_backup_local(taskData);
-
-        // Swap em back.
-        taskData->path = std::move(storePath);
-    }
+    // Restore the original backup path.
+    taskData->path = std::move(originalPath);
 }
 
 static bool read_and_process_meta(const fslib::Path &targetDir, BackupMenuState::TaskData taskData, sys::ProgressTask *task)

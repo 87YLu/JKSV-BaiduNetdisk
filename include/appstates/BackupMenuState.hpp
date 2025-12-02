@@ -53,6 +53,7 @@ class BackupMenuState final : public BaseState
         void save_data_written();
 
         // clang-format off
+        /// @brief Types of entries corresponding to the menu.
         enum class MenuEntryType : uint8_t
         {
             Null,
@@ -60,25 +61,46 @@ class BackupMenuState final : public BaseState
             Remote
         };
 
+        /// @brief The menu entry. Stores the type and the index in the respective target (remote/local)
         struct MenuEntry
         {
             MenuEntryType type{};
             int index{};
         };
 
+        /// @brief Datastruct passed to tasks.
         struct DataStruct : sys::Task::DataStruct
         {
+            /// @brief Pointer to the target user.
             data::User *user{};
+
+            /// @brief Pointer to the target title.
             data::TitleInfo *titleInfo{};
+
+            /// @brief Pointer to the data for the save.
             const FsSaveDataInfo *saveInfo{};
-            fslib::Path path{}; // This and
-            std::string remoteName{}; // and this and
-            remote::Item *remoteItem{}; // this are set when needed.
+
+            /// @brief Pointer to the base path of the instance. Used for constructing auto backups (cause it's easier)
+            fslib::Path *basePath{};
+
+            /// @brief Path. This changes according to the context used.
+            fslib::Path path{}; 
+
+            /// @brief Name to use when the file is uploaded remotely.
+            std::string remoteName{};
+
+            /// @brief This is set and used when something is being targetted remotely.
+            remote::Item *remoteItem{}; 
+
+            /// @brief This is a pointer to the backup menu instance so refresh() and save_data_written() can be called.
             BackupMenuState *spawningState{};
-            bool killTask = false; // Some tasks use other tasks instead of repeating code.
+
+            /// @brief Signals whether or not the backup fuctions should kill the task when finished. This is so they can be reused.
+            bool killTask = false; 
         };
         // clang-format on
 
+        /// @brief This makes this easier to work with and type.
         using TaskData = std::shared_ptr<BackupMenuState::DataStruct>;
 
     private:
