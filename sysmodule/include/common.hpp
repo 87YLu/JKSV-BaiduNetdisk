@@ -110,6 +110,7 @@ namespace background
     std::string queue_key(const FsSaveDataInfo &saveInfo);
     bool load_settings(Settings &settings);
     bool prepare_title_backups(uint64_t titleId, const Settings &settings);
-    void process_pending_backups(const Settings &settings);
+    size_t process_pending_backups(const Settings &settings);
     bool pending_backups_exist();
+    bool queue_ultrahand_notification(size_t uploadedCount);
 } // namespace background

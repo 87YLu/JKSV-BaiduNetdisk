@@ -1,6 +1,8 @@
 # JKSV 百度网盘存档同步
 
-> v1.0.0 · 适用于运行 Atmosphère 的 Nintendo Switch
+> v1.0.1 · 适用于运行 Atmosphère 的 Nintendo Switch
+
+版本变化请参阅 [CHANGELOG.MD](CHANGELOG.MD)。
 
 这是一个加入百度网盘支持的 JKSV 版本。完成一次配置后，它可以在游戏结束时自动备份对应存档并上传到百度网盘，也可以在 JKSV 中查看、上传和恢复云端备份。
 
@@ -9,6 +11,7 @@
 - 使用百度网盘 App 扫描二维码登录，不需要在 Switch 上输入百度账号密码。
 - 自动保存并续期登录状态，通常不需要反复扫码。
 - 游戏关闭后自动备份对应存档并上传百度网盘。
+- 使用 Ultrahand 时，后台上传成功后显示系统级 Toast 提示。
 - 存档没有变化时自动跳过，避免重复上传。
 - 断网或上传失败时保留任务，恢复联网后自动重试。
 - 支持账号存档和可选的设备共享存档。
@@ -99,6 +102,8 @@
     /apps/JKSV/<游戏名>/AUTO - <用户 [账号标识]> - <时间>.zip
 
 上传成功后会记录本次存档状态。下次退出游戏时，如果存档没有变化，就不会再次上传。
+
+如果 nx-ovlloader 已加载支持 API Notifications 的 Ultrahand（建议 2.3.0 或更新版本），后台模块会在每批上传完成后显示一次 Toast。仅安装 nx-ovlloader 不够，还必须在 **/config/ultrahand/config.ini** 的 `[ultrahand]` 段设置 `notifications=true`，并重新加载 Ultrahand 或完整重启 Switch。通知不可用时只会跳过提示，不会影响备份和上传。
 
 如果网络暂时不可用，待上传文件会留在队列中，并在联网且没有游戏运行时自动重试。
 
@@ -221,6 +226,16 @@
 - 确认 basepath 与开放平台应用目录一致。
 - 在设置中退出百度网盘后重新扫码登录。
 - 查看 **/config/JKSV/background-sync.log** 中最近一次 UPLOAD_FAILED 后面的错误信息。
+
+### 上传成功但没有 Toast
+
+- 确认 nx-ovlloader 当前加载的是 Ultrahand，而不是 Tesla Menu；仅有 nx-ovlloader 无法显示通知。
+- 打开 **/config/ultrahand/config.ini**，确认 `[ultrahand]` 段中存在 `notifications=true`。
+- 如果 `notifications_hotkey=true`，单独长按 **[-]** 约 3 秒会切换通知；请确认没有因此被改回 `notifications=false`。
+- 修改配置后重新加载 Ultrahand，或将 Switch 完整重启。
+- 确认本次日志包含 `UPLOAD_OK`；`SAVE_UNCHANGED` 和 `UPLOAD_FAILED` 不会触发通知。
+- 建议使用 Ultrahand 2.3.0 或更新版本。
+- 查看后台日志中是否出现 `NOTIFY_QUEUED`、`NOTIFY_SKIPPED` 或 `NOTIFY_FAILED`。
 
 ### 自动生成了多份备份
 

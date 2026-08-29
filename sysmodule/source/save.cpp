@@ -648,24 +648,25 @@ bool background::pending_backups_exist()
     return found;
 }
 
-void background::process_pending_backups(const background::Settings &settings)
+size_t background::process_pending_backups(const background::Settings &settings)
 {
     std::vector<background::PendingBackup> pending = list_pending_backups();
-    if (pending.empty()) { return; }
+    if (pending.empty()) { return 0; }
 
     background::BaiduClient client{};
     if (!client.initialize(settings.verifyTls))
     {
         background::logf("BAIDU_NOT_READY error=%s", client.last_error().c_str());
-        return;
+        return 0;
     }
 
+    size_t uploadedCount{};
     for (const background::PendingBackup &item : pending)
     {
         if (background::g_runningTitleId.load(std::memory_order_acquire) != 0)
         {
             background::log("UPLOAD_DEFERRED game-running");
-            return;
+            return uploadedCount;
         }
 
         background::logf("UPLOAD_START title=%s user=%s", item.title.c_str(), item.user.c_str());
@@ -689,5 +690,7 @@ void background::process_pending_backups(const background::Settings &settings)
                          item.title.c_str(),
                          item.user.c_str(),
                          item.remotePath.c_str());
+        ++uploadedCount;
     }
+    return uploadedCount;
 }

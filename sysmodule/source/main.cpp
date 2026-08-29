@@ -239,7 +239,7 @@ int main(int, char **)
     background::ensure_directory(background::QUEUE_DIRECTORY);
     background::ensure_directory(background::STATE_DIRECTORY);
     background::log(
-        "START version=1.0.0 heap=4096KiB stack=512KiB background-sync startup-grace=30s low-power-idle=30s");
+        "START version=1.0.1 heap=4096KiB stack=512KiB background-sync startup-grace=30s low-power-idle=30s");
 
     if (!handle_previous_interruption())
     {
@@ -313,12 +313,14 @@ int main(int, char **)
             }
             if (deferredTitle != 0) { continue; }
 
+            size_t uploadedCount{};
             begin_guarded_operation();
             if (background::prepare_title_backups(title, settings))
             {
-                background::process_pending_backups(settings);
+                uploadedCount = background::process_pending_backups(settings);
             }
             end_guarded_operation();
+            if (uploadedCount != 0) { background::queue_ultrahand_notification(uploadedCount); }
             lastQueueAttempt = std::time(nullptr);
             continue;
         }
@@ -327,9 +329,11 @@ int main(int, char **)
         if (background::pending_backups_exist() &&
             (lastQueueAttempt == 0 || now - lastQueueAttempt >= settings.retryMinutes * 60))
         {
+            size_t uploadedCount{};
             begin_guarded_operation();
-            background::process_pending_backups(settings);
+            uploadedCount = background::process_pending_backups(settings);
             end_guarded_operation();
+            if (uploadedCount != 0) { background::queue_ultrahand_notification(uploadedCount); }
             lastQueueAttempt = now;
         }
 
