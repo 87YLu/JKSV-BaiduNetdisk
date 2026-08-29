@@ -37,3 +37,15 @@ std::string sys::Task::get_status() noexcept
     std::lock_guard statusGuard{m_statusLock};
     return m_status;
 }
+
+void sys::Task::set_image(std::vector<uint8_t> image)
+{
+    std::lock_guard imageGuard{m_imageLock};
+    m_image = std::move(image);
+}
+
+std::vector<uint8_t> sys::Task::take_image()
+{
+    std::lock_guard imageGuard{m_imageLock};
+    return std::move(m_image);
+}

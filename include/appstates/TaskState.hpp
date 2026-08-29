@@ -3,6 +3,7 @@
 #include "appstates/BaseTask.hpp"
 #include "appstates/FadeState.hpp"
 #include "graphics/colors.hpp"
+#include "sdl.hpp"
 #include "sys/sys.hpp"
 
 #include <switch.h>
@@ -45,6 +46,9 @@ class TaskState final : public BaseTask
         void render() override;
 
     private:
+        /// @brief Optional task-provided image rendered alongside its status.
+        sdl::SharedTexture m_taskImage{};
+
         /// @brief Performs some operations and marks the state for deletion.
         void deactivate_state();
 };

@@ -27,7 +27,8 @@
         "13: Backup must be a zip to upload!",
         "14: Error mounting save data!",
         "15: Error closing save data!",
-        "16: Backup contains no meta file!"
+        "16: Backup contains no meta file!",
+        "17: Backup uploaded to cloud successfully!"
     ],
     "BackupMenuStatus": [
         "0: Processing save data meta file..."
@@ -93,6 +94,24 @@
     ],
     "GeneralPops": [
         "0: Unable to exit JKSV while tasks are running!"
+    ],
+    "BaiduNetdiskStrings": [
+        "0: Scan the QR code with the Baidu Netdisk app to authorize.\nOr go to #%s# and enter >%s>.\nPress [B] to cancel.",
+        "1: Successfully signed in to Baidu Netdisk!",
+        "2: Baidu Netdisk sign in failed!",
+        "3: Baidu Netdisk account: %s",
+        "4: Sign out of Baidu Netdisk",
+        "5: Not configured",
+        "6: Signed out - press [A] to sign in",
+        "7: Signed in (name unavailable)",
+        "8: Shows the Baidu Netdisk account authorized on this console. Press [A] here to sign in again after signing out.",
+        "9: Clears local Baidu OAuth tokens and pauses background uploads. App credentials, settings, queued backups, and cloud files are preserved.",
+        "10: Sign out of Baidu Netdisk on this console? Files already stored in the cloud will not be deleted.",
+        "11: Signing out of Baidu Netdisk...",
+        "12: Signed out of Baidu Netdisk.",
+        "13: Failed to sign out of Baidu Netdisk.",
+        "14: Unable to start Baidu Netdisk sign in. Check the configuration and network connection.",
+        "15: No Baidu Netdisk account is currently signed in."
     ],
     "GoogleDriveStrings": [
         "0: To continue, go to #%s# and enter >%s>!",

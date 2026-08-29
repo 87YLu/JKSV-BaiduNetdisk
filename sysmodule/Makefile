@@ -15,7 +15,6 @@ include $(DEVKITPRO)/libnx/switch_rules
 # SOURCES is a list of directories containing source code
 # DATA is a list of directories containing data files
 # INCLUDES is a list of directories containing header files
-# EXEFS_SRC is the optional input directory containing data copied into exefs, if anything this normally should only contain "main.npdm".
 # ROMFS is the directory containing data to be added to RomFS, relative to the Makefile (Optional)
 #
 # NO_ICON: if set to anything, do not use icon.
@@ -29,40 +28,38 @@ include $(DEVKITPRO)/libnx/switch_rules
 #     - <Project name>.jpg
 #     - icon.jpg
 #     - <libnx folder>/default_icon.jpg
+#
+# CONFIG_JSON is the filename of the NPDM config file (.json), relative to the project folder.
+#   If not set, it attempts to use one of the following (in this order):
+#     - <Project name>.json
+#     - config.json
+#   If a JSON file is provided or autodetected, an ExeFS PFS0 (.nsp) is built instead
+#   of a homebrew executable (.nro). This is intended to be used for sysmodules.
+#   NACP building is skipped as well.
 #---------------------------------------------------------------------------------
-TARGET		:=	JKSV
+TARGET		:=	JKSVBaiduSync
 BUILD		:=	build
-SOURCES		:=	source source/appstates source/config source/curl source/data source/fs \
-				source/keyboard source/logging source/remote source/strings source/sys \
-				source/tasks source/ui
+SOURCES		:=	source
 DATA		:=	data
-INCLUDES	:=	include ./Libraries/FsLib/Switch/FsLib/include ./Libraries/SDLLib/SDL/include
-EXEFS_SRC	:=	exefs_src
-APP_TITLE   :=  JKSV Baidu Sync
-APP_AUTHOR  :=  JK / Baidu integration
-APP_VERSION :=  1.0.0
-ROMFS	    :=	romfs
-ICON		:=	icon.jpg
+INCLUDES	:=	include
+#ROMFS	:=	romfs
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-# NOTE: For some reason, devkitpro no longer has freetype-config included? Also, using pkg-config causes conflicts with
-# my local pkg-config and I don't feel like dealing with CMake for all of this right now.
-CFLAGS	:=	$(INCLUDE) -D__SWITCH__ `sdl2-config --cflags` `curl-config --cflags`\
-			-g -Wall -O3 -Os -ffunction-sections -ffast-math -fmax-errors=1 \
-			-I$(PORTLIBS)/include/freetype2 $(ARCH) $(DEFINES)
+CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
+			$(ARCH) $(DEFINES)
 
-CXXFLAGS:= $(CFLAGS) -fno-rtti -fno-exceptions -std=c++23
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ `curl-config --cflags`
+
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=c++23 -Wframe-larger-than=8192
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:=	../Libraries/FsLib/Switch/FsLib/lib/libFsLib.a ../Libraries/SDLLib/SDL/lib/libSDL.a \
-			`sdl2-config --libs` -lfreetype -lharfbuzz `curl-config --libs` -lSDL2_image  \
-			-lwebp -lpng -ljpeg -lz -lminizip -ljson-c -ltinyxml2 -lnx -lbz2 -lz
+LIBS	:= `curl-config --libs` -lminizip -ljson-c -lz -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -116,7 +113,18 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 
 export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
-export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
+ifeq ($(strip $(CONFIG_JSON)),)
+	jsons := $(wildcard *.json)
+	ifneq (,$(findstring $(TARGET).json,$(jsons)))
+		export APP_JSON := $(TOPDIR)/$(TARGET).json
+	else
+		ifneq (,$(findstring config.json,$(jsons)))
+			export APP_JSON := $(TOPDIR)/config.json
+		endif
+	endif
+else
+	export APP_JSON := $(TOPDIR)/$(CONFIG_JSON)
+endif
 
 ifeq ($(strip $(ICON)),)
 	icons := $(wildcard *.jpg)
@@ -147,55 +155,26 @@ ifneq ($(ROMFS),)
 	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: $(BUILD) FsLib SDLLib Assets background clean all
+.PHONY: $(BUILD) clean all
 
 #---------------------------------------------------------------------------------
-all: FsLib SDLLib Assets $(BUILD)
+all: $(BUILD)
 
-$(BUILD): FsLib SDLLib Assets
+$(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------
-
-FsLib:
-	@$(MAKE) -C ./Libraries/FsLib/Switch/FsLib/ -j
-
-#---------------------------------------------------------------------------------
-
-SDLLib:
-	@$(MAKE) -C ./Libraries/SDLLib/SDL/ -j
-
-#---------------------------------------------------------------------------------
-
-Assets:
-	@echo python script
-	@python ./Assets/compress_assets.py
-
-#---------------------------------------------------------------------------------
-
-background:
-	@$(MAKE) -C ./sysmodule -j
-
-#---------------------------------------------------------------------------------
-
 clean:
 	@echo clean ...
-	@$(MAKE) -C ./Libraries/FsLib/Switch/FsLib clean
-	@$(MAKE) -C ./Libraries/SDLLib/SDL clean
-	@rm -fr $(BUILD) $(TARGET).pfs0 $(TARGET).nso $(TARGET).nro $(TARGET).nacp $(TARGET).elf
-	@rm -r ./romfs/Text
+ifeq ($(strip $(APP_JSON)),)
+	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+else
+	@rm -fr $(BUILD) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
+endif
+
 
 #---------------------------------------------------------------------------------
-send: $(BUILD)
-	@nxlink $(TARGET).nro
-
-#---------------------------------------------------------------------------------
-
-debug: $(BUILD)
-	@nxlink -s $(TARGET).nro
-
-
 else
 .PHONY:	all
 
@@ -204,16 +183,24 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-all	:	$(OUTPUT).pfs0 $(OUTPUT).nro
+ifeq ($(strip $(APP_JSON)),)
 
-$(OUTPUT).pfs0	:	$(OUTPUT).nso
-
-$(OUTPUT).nso	:	$(OUTPUT).elf
+all	:	$(OUTPUT).nro
 
 ifeq ($(strip $(NO_NACP)),)
 $(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
 else
 $(OUTPUT).nro	:	$(OUTPUT).elf
+endif
+
+else
+
+all	:	$(OUTPUT).nsp
+
+$(OUTPUT).nsp	:	$(OUTPUT).nso $(OUTPUT).npdm
+
+$(OUTPUT).nso	:	$(OUTPUT).elf
+
 endif
 
 $(OUTPUT).elf	:	$(OFILES)

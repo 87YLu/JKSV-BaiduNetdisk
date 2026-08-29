@@ -2,9 +2,11 @@
 #include "sys/threadpool.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 // This macro helps keep things a bit easier to read and cuts down on repetition.
 #define TASK_FINISH_RETURN(x)                                                                                                  \
@@ -51,6 +53,12 @@ namespace sys
             /// @return Copy of the status string.
             std::string get_status() noexcept;
 
+            /// @brief Publishes an encoded image for task states to display. Thread safe.
+            void set_image(std::vector<uint8_t> image);
+
+            /// @brief Moves the pending encoded image to the render thread. Thread safe.
+            std::vector<uint8_t> take_image();
+
         protected:
             // Whether task is still running.
             std::atomic<bool> m_isRunning{};
@@ -61,5 +69,9 @@ namespace sys
 
             // Mutex so that string doesn't get messed up.
             std::mutex m_statusLock{};
+
+            // Optional encoded image supplied by a worker (for example an OAuth QR code).
+            std::vector<uint8_t> m_image{};
+            std::mutex m_imageLock{};
     };
 } // namespace sys

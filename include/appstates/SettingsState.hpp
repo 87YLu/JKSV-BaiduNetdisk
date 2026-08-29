@@ -37,6 +37,9 @@ class SettingsState final : public BaseState
         /// @brief Render target to render to.
         sdl::SharedTexture m_renderTarget{};
 
+        /// @brief Refreshes the cached Baidu account row after a child state closes.
+        bool m_refreshBaiduStatus{true};
+
         /// @brief Loads the settings menu strings.
         void load_settings_menu();
 
@@ -45,6 +48,15 @@ class SettingsState final : public BaseState
 
         /// @brief Runs a routine to update the menu strings for the menu.
         void update_menu_options();
+
+        /// @brief Updates the Baidu account row from the cached OAuth configuration.
+        void update_baidu_account_option();
+
+        /// @brief Starts Baidu sign-in when the account row is selected while signed out.
+        void handle_baidu_account_option();
+
+        /// @brief Opens the Baidu sign-out confirmation dialog.
+        void confirm_baidu_sign_out();
 
         /// @brief Changes the current output directory of JKSV.
         void change_working_directory();

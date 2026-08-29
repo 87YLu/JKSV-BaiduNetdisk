@@ -1,0 +1,12 @@
+{
+    "app_key": "你的 AppKey",
+    "secret_key": "你的 SecretKey",
+    "basepath": "/apps/JKSV",
+    "background_sync": true,
+    "background_include_device_saves": true,
+    "background_keep_local": false,
+    "background_verify_tls": true,
+    "background_compression": 1,
+    "background_close_delay_seconds": 3,
+    "background_retry_minutes": 5
+}

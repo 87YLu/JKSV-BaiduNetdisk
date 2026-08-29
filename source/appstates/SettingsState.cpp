@@ -1,6 +1,7 @@
 #include "appstates/SettingsState.hpp"
 
 #include "appstates/BlacklistEditState.hpp"
+#include "appstates/ConfirmState.hpp"
 #include "appstates/MainMenuState.hpp"
 #include "appstates/MessageState.hpp"
 #include "config/config.hpp"
@@ -12,9 +13,12 @@
 #include "input.hpp"
 #include "keyboard/keyboard.hpp"
 #include "logging/logger.hpp"
+#include "remote/remote.hpp"
 #include "strings/strings.hpp"
 #include "stringutil.hpp"
+#include "ui/PopMessageManager.hpp"
 
+#include <algorithm>
 #include <array>
 
 namespace
@@ -62,8 +66,47 @@ namespace
         CycleSortType = 17,
         ToggleJKSM    = 18,
         ToggleTrash   = 24,
-        CycleScaling  = 25
+        CycleScaling  = 25,
+        BaiduAccount  = 26,
+        BaiduSignOut  = 27
     };
+
+    enum BaiduStringIndexes
+    {
+        BaiduAccountFormat       = 3,
+        BaiduSignOutOption       = 4,
+        BaiduNotConfigured       = 5,
+        BaiduSignedOut           = 6,
+        BaiduNameUnavailable     = 7,
+        BaiduAccountDescription  = 8,
+        BaiduSignOutDescription  = 9,
+        BaiduSignOutConfirmation = 10,
+        BaiduSignOutStatus       = 11,
+        BaiduSignOutSuccess      = 12,
+        BaiduSignOutFailed       = 13,
+        BaiduSignInStartFailed   = 14,
+        BaiduNoSignedInAccount   = 15
+    };
+
+    const char *get_baidu_string(int index, const char *fallback)
+    {
+        const char *translated = strings::get_by_name(strings::names::BAIDU_NETDISK, index);
+        return translated ? translated : fallback;
+    }
+
+    void baidu_sign_out_task(sys::threadpool::JobData taskData)
+    {
+        auto castData  = std::static_pointer_cast<sys::Task::DataStruct>(taskData);
+        sys::Task *task = castData->task;
+        task->set_status(get_baidu_string(BaiduSignOutStatus, "Signing out of Baidu Netdisk..."));
+
+        const bool success = remote::sign_out_baidu_netdisk();
+        const char *message = success
+                                  ? get_baidu_string(BaiduSignOutSuccess, "Signed out of Baidu Netdisk.")
+                                  : get_baidu_string(BaiduSignOutFailed, "Failed to sign out of Baidu Netdisk.");
+        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS, message);
+        task->complete();
+    }
 
 } // namespace
 
@@ -89,6 +132,8 @@ void SettingsState::update()
     const bool xPressed     = input::button_pressed(HidNpadButton_X);
     const bool minusPressed = input::button_pressed(HidNpadButton_Minus);
 
+    if (m_refreshBaiduStatus) { SettingsState::update_baidu_account_option(); }
+
     m_settingsMenu->update(hasFocus);
     if (aPressed) { SettingsState::toggle_options(); }
     else if (xPressed) { SettingsState::reset_settings(); }
@@ -98,7 +143,11 @@ void SettingsState::update()
     m_controlGuide->update(hasFocus);
 }
 
-void SettingsState::sub_update() { m_controlGuide->sub_update(); }
+void SettingsState::sub_update()
+{
+    m_refreshBaiduStatus = true;
+    m_controlGuide->sub_update();
+}
 
 void SettingsState::render()
 {
@@ -119,6 +168,11 @@ void SettingsState::load_settings_menu()
     {
         m_settingsMenu->add_option(option);
     }
+
+    m_settingsMenu->add_option(
+        get_baidu_string(BaiduAccountFormat, "Baidu Netdisk account: %s"));
+    m_settingsMenu->add_option(
+        get_baidu_string(BaiduSignOutOption, "Sign out of Baidu Netdisk"));
 }
 
 void SettingsState::load_extra_strings()
@@ -164,6 +218,73 @@ void SettingsState::update_menu_options()
         const std::string scalingOption = stringutil::get_formatted_string(scalingFormat, scaling);
         m_settingsMenu->edit_option(CaseIndexes::CycleScaling, scalingOption);
     }
+
+    SettingsState::update_baidu_account_option();
+}
+
+void SettingsState::update_baidu_account_option()
+{
+    const remote::BaiduAccountStatus account = remote::get_baidu_account_status();
+    std::string status{};
+    if (!account.configured)
+    {
+        status = get_baidu_string(BaiduNotConfigured, "Not configured");
+    }
+    else if (!account.signedIn)
+    {
+        status = get_baidu_string(BaiduSignedOut, "Signed out - press [A] to sign in");
+    }
+    else if (account.displayName.empty())
+    {
+        status = get_baidu_string(BaiduNameUnavailable, "Signed in (name unavailable)");
+    }
+    else
+    {
+        status = account.displayName;
+        std::replace_if(status.begin(), status.end(), [](unsigned char character) { return character < 0x20; }, ' ');
+    }
+
+    const char *format = get_baidu_string(BaiduAccountFormat, "Baidu Netdisk account: %s");
+    const std::string option = stringutil::get_formatted_string(format, status.c_str());
+    m_settingsMenu->edit_option(CaseIndexes::BaiduAccount, option);
+    m_refreshBaiduStatus = false;
+}
+
+void SettingsState::handle_baidu_account_option()
+{
+    const remote::BaiduAccountStatus account = remote::get_baidu_account_status();
+    if (account.signedIn) { return; }
+
+    const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
+    if (!account.configured)
+    {
+        ui::PopMessageManager::push_message(
+            popTicks, get_baidu_string(BaiduNotConfigured, "Baidu Netdisk is not configured."));
+        return;
+    }
+    if (!remote::begin_baidu_netdisk_sign_in())
+    {
+        ui::PopMessageManager::push_message(
+            popTicks, get_baidu_string(BaiduSignInStartFailed, "Unable to start Baidu Netdisk sign in."));
+    }
+}
+
+void SettingsState::confirm_baidu_sign_out()
+{
+    const remote::BaiduAccountStatus account = remote::get_baidu_account_status();
+    if (!account.signedIn)
+    {
+        ui::PopMessageManager::push_message(
+            ui::PopMessageManager::DEFAULT_TICKS,
+            get_baidu_string(BaiduNoSignedInAccount, "No Baidu Netdisk account is currently signed in."));
+        return;
+    }
+
+    const char *query = get_baidu_string(
+        BaiduSignOutConfirmation,
+        "Sign out of Baidu Netdisk on this console? Files already stored in the cloud will not be deleted.");
+    auto taskData = std::make_shared<sys::Task::DataStruct>();
+    ConfirmTask::create_push_fade(query, false, baidu_sign_out_task, nullptr, taskData);
 }
 
 void SettingsState::change_working_directory()
@@ -237,6 +358,8 @@ void SettingsState::toggle_options()
         case CaseIndexes::ToggleJKSM:    SettingsState::toggle_jksm_mode(); break;
         case CaseIndexes::ToggleTrash:   SettingsState::toggle_trash_folder(); break;
         case CaseIndexes::CycleScaling:  SettingsState::cycle_anim_scaling(); break;
+        case CaseIndexes::BaiduAccount:  SettingsState::handle_baidu_account_option(); break;
+        case CaseIndexes::BaiduSignOut:  SettingsState::confirm_baidu_sign_out(); break;
         default:                         config::toggle_by_key(CONFIG_KEY_ARRAY[selected]); break;
     }
 
@@ -252,7 +375,20 @@ void SettingsState::reset_settings()
 void SettingsState::create_push_description_message()
 {
     const int selected      = m_settingsMenu->get_selected();
-    const char *description = strings::get_by_name(strings::names::SETTINGS_DESCRIPTIONS, selected);
+    const char *description{};
+    if (selected == CaseIndexes::BaiduAccount)
+    {
+        description = get_baidu_string(
+            BaiduAccountDescription,
+            "Shows the Baidu Netdisk account authorized on this console. Press [A] here to sign in again after signing out.");
+    }
+    else if (selected == CaseIndexes::BaiduSignOut)
+    {
+        description = get_baidu_string(
+            BaiduSignOutDescription,
+            "Clears local Baidu OAuth tokens and pauses background uploads. App credentials, settings, queued backups, and cloud files are preserved.");
+    }
+    else { description = strings::get_by_name(strings::names::SETTINGS_DESCRIPTIONS, selected); }
 
     MessageState::create_push_fade(description);
 }

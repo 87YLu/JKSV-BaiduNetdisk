@@ -15,5 +15,20 @@ JKSV.nso
 JKSV.pfs0
 
 #sometimes I give jksv to people and forget about this.
-JKSV.zip
-JKSV.nro.zip
+*.zip
+.DS_Store
+
+# Background sysmodule build artifacts
+sysmodule/JKSVBaiduSync.elf
+sysmodule/JKSVBaiduSync.npdm
+sysmodule/JKSVBaiduSync.nso
+sysmodule/JKSVBaiduSync.nsp
+
+# Generated compressed translations
+romfs/Text/
+
+# Local release notes and visual experiments
+UPGRADE_V*.txt
+*-preview*.png
+*-design-comparison.png
+design-qa.md

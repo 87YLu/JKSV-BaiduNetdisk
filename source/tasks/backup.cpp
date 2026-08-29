@@ -18,6 +18,13 @@ namespace
 
     // I got tired of typing out the DEFAULT_TICKS.
     constexpr int POP_TICKS = ui::PopMessageManager::DEFAULT_TICKS;
+
+    void push_upload_success()
+    {
+        const char *translated = strings::get_by_name(strings::names::BACKUPMENU_POPS, 17);
+        ui::PopMessageManager::push_message(
+            POP_TICKS, translated ? translated : "Backup uploaded to cloud successfully!");
+    }
 }
 
 // Definitions at bottom.
@@ -162,6 +169,7 @@ void tasks::backup::create_new_backup_remote(sys::threadpool::JobData taskData)
         const char *popErrorUploading = strings::get_by_name(strings::names::BACKUPMENU_POPS, 10);
         ui::PopMessageManager::push_message(POP_TICKS, popErrorUploading);
     }
+    if (uploaded) { push_upload_success(); }
 
     if (spawningState) { spawningState->refresh(); }
     if (killTask) { task->complete(); }
@@ -246,7 +254,8 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
         task->set_status(status);
     }
     // Patch the backup.
-    remote->patch_file(target, tempPath, task);
+    const bool uploaded = remote->patch_file(target, tempPath, task);
+    if (uploaded) { push_upload_success(); }
 
     // Delete the temporary local backup.
     const bool deleteError = error::fslib(fslib::delete_file(tempPath));
@@ -588,6 +597,7 @@ void tasks::backup::upload_backup(sys::threadpool::JobData taskData)
         const char *popError = strings::get_by_name(strings::names::BACKUPMENU_POPS, 10);
         ui::PopMessageManager::push_message(POP_TICKS, popError);
     }
+    else { push_upload_success(); }
 
     spawningState->refresh();
     task->complete();
@@ -624,7 +634,8 @@ void tasks::backup::patch_backup(sys::threadpool::JobData taskData)
         task->set_status(status);
     }
 
-    remote->patch_file(remoteItem, path, task);
+    const bool uploaded = remote->patch_file(remoteItem, path, task);
+    if (uploaded) { push_upload_success(); }
     task->complete();
 }
 

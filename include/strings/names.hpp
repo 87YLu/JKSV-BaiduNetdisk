@@ -8,6 +8,7 @@ namespace strings::names
     inline constexpr std::string_view BACKUPMENU_CONFS      = "BackupMenuConfirmations";
     inline constexpr std::string_view BACKUPMENU_POPS       = "BackupMenuPops";
     inline constexpr std::string_view BACKUPMENU_STATUS     = "BackupMenuStatus";
+    inline constexpr std::string_view BAIDU_NETDISK         = "BaiduNetdiskStrings";
     inline constexpr std::string_view CONTROL_GUIDES        = "ControlGuides";
     inline constexpr std::string_view DATA_LOADING_STATUS   = "DataLoadingStatus";
     inline constexpr std::string_view EXTRASMENU_MENU       = "ExtrasMenu";

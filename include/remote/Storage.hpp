@@ -22,6 +22,9 @@ namespace remote
             /// @brief This just allocates the curl::Handle. Never mind.
             Storage(std::string_view prefix, bool supportsUtf8 = false);
 
+            /// @brief Storage is owned polymorphically by the remote service manager.
+            virtual ~Storage() = default;
+
             /// @brief Returns whether or not the Storage type was successfully. initialized.
             bool is_initialized() const noexcept;
 
