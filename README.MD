@@ -1,6 +1,6 @@
 # JKSV 百度网盘存档同步
 
-> v1.0.1 · 适用于运行 Atmosphère 的 Nintendo Switch
+> v1.0.2 · 适用于运行 Atmosphère 的 Nintendo Switch
 
 版本变化请参阅 [CHANGELOG.MD](CHANGELOG.MD)。
 
@@ -175,7 +175,7 @@
 | background_verify_tls | true | 校验 HTTPS 证书，建议保持开启 |
 | background_compression | 1 | ZIP 压缩等级，范围 0–9 |
 | background_close_delay_seconds | 3 | 关闭游戏后等待存档写入的秒数，范围 1–30 |
-| background_retry_minutes | 5 | 上传失败后的重试间隔，范围 1–180 分钟 |
+| background_retry_minutes | 5 | 上传失败后的基础重试间隔，连续失败时逐步退避；范围 1–180 分钟 |
 
 修改配置后，建议完整重启 Switch。
 
