@@ -53,7 +53,7 @@ class SettingsState final : public BaseState
         void update_baidu_account_option();
 
         /// @brief Starts Baidu sign-in when the account row is selected while signed out.
-        void handle_baidu_account_option();
+        void handle_baidu_account_option(bool forceReauthorize = false);
 
         /// @brief Opens the Baidu sign-out confirmation dialog.
         void confirm_baidu_sign_out();

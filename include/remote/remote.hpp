@@ -33,7 +33,8 @@ namespace remote
     BaiduAccountStatus get_baidu_account_status();
 
     /// @brief Starts an explicit Baidu device-code sign-in from the settings screen.
-    bool begin_baidu_netdisk_sign_in();
+    // forceReauthorize clears the previous login and always requests a new QR code.
+    bool begin_baidu_netdisk_sign_in(bool forceReauthorize = false);
 
     /// @brief Clears local Baidu OAuth tokens while preserving the app credentials and settings.
     bool sign_out_baidu_netdisk();

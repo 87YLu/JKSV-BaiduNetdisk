@@ -853,8 +853,8 @@ bool remote::BaiduNetdisk::refresh_token()
     if (!BaiduNetdisk::response_succeeded(response, "token refresh", parser))
     {
         const std::string oauthError = get_json_string(parser.get(), "error");
-        m_refreshRejected = oauthError == "invalid_grant" || oauthError == "invalid_client" ||
-                            oauthError == "unauthorized_client";
+        m_refreshRejected = oauthError == "invalid_grant" || oauthError == "expired_token" ||
+                            oauthError == "invalid_client" || oauthError == "unauthorized_client";
         return false;
     }
 

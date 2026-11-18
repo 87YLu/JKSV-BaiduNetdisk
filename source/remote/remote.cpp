@@ -230,10 +230,16 @@ remote::BaiduAccountStatus remote::get_baidu_account_status()
     return status;
 }
 
-bool remote::begin_baidu_netdisk_sign_in()
+bool remote::begin_baidu_netdisk_sign_in(bool forceReauthorize)
 {
     const remote::BaiduAccountStatus status = remote::get_baidu_account_status();
-    if (!status.configured || status.signedIn || !remote::has_internet_connection()) { return false; }
+    if (!status.configured || (!forceReauthorize && status.signedIn) || !remote::has_internet_connection())
+    {
+        return false;
+    }
+    // Reuse the logout marker to prevent a concurrent background refresh from
+    // restoring old credentials. Cancellation leaves the account signed out.
+    if (forceReauthorize && !remote::sign_out_baidu_netdisk()) { return false; }
     return initialize_baidu_netdisk(true);
 }
 
@@ -322,6 +328,8 @@ static void baidu_sign_in(sys::threadpool::JobData taskData)
     if (!baidu->get_sign_in_data(message, deviceCode, expiration, pollingInterval, qrImage))
     {
         logger::log("Error signing in to Baidu Netdisk: Getting device authorization data failed.");
+        const char *failure = strings::get_by_name(strings::names::BAIDU_NETDISK, 14);
+        ui::PopMessageManager::push_message(popTicks, failure ? failure : "Unable to start Baidu Netdisk sign in.");
         TASK_FINISH_RETURN(task);
     }
 

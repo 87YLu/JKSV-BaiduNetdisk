@@ -720,6 +720,11 @@ bool background::BaiduClient::parse_response(Response &response,
     {
         if (error == -6) { m_tokenExpires = 0; }
         set_error(context, &response);
+        const std::string oauthError = get_string(parser, "error");
+        if (oauthError == "expired_token" || oauthError == "invalid_grant")
+        {
+            m_lastError = "OAuth refresh authorization expired or revoked; open JKSV Settings and select QR-code sign-in again";
+        }
         json_object_put(parser);
         return false;
     }

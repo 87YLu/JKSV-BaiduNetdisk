@@ -111,7 +111,9 @@
         "12: Signed out of Baidu Netdisk.",
         "13: Failed to sign out of Baidu Netdisk.",
         "14: Unable to start Baidu Netdisk sign in. Check the configuration and network connection.",
-        "15: No Baidu Netdisk account is currently signed in."
+        "15: No Baidu Netdisk account is currently signed in.",
+        "16: Sign in again to Baidu Netdisk (QR code)",
+        "17: Clears the previous login and opens a new login QR code, even if already signed in. Canceling leaves you signed out. Backups and app settings are preserved."
     ],
     "GoogleDriveStrings": [
         "0: To continue, go to #%s# and enter >%s>!",

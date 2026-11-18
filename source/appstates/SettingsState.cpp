@@ -68,7 +68,8 @@ namespace
         ToggleTrash   = 24,
         CycleScaling  = 25,
         BaiduAccount  = 26,
-        BaiduSignOut  = 27
+        BaiduSignOut  = 27,
+        BaiduSignIn   = 28
     };
 
     enum BaiduStringIndexes
@@ -85,7 +86,9 @@ namespace
         BaiduSignOutSuccess      = 12,
         BaiduSignOutFailed       = 13,
         BaiduSignInStartFailed   = 14,
-        BaiduNoSignedInAccount   = 15
+        BaiduNoSignedInAccount   = 15,
+        BaiduSignInOption        = 16,
+        BaiduSignInDescription   = 17
     };
 
     const char *get_baidu_string(int index, const char *fallback)
@@ -173,6 +176,8 @@ void SettingsState::load_settings_menu()
         get_baidu_string(BaiduAccountFormat, "Baidu Netdisk account: %s"));
     m_settingsMenu->add_option(
         get_baidu_string(BaiduSignOutOption, "Sign out of Baidu Netdisk"));
+    m_settingsMenu->add_option(
+        get_baidu_string(BaiduSignInOption, "Sign in again to Baidu Netdisk (QR code)"));
 }
 
 void SettingsState::load_extra_strings()
@@ -250,10 +255,10 @@ void SettingsState::update_baidu_account_option()
     m_refreshBaiduStatus = false;
 }
 
-void SettingsState::handle_baidu_account_option()
+void SettingsState::handle_baidu_account_option(bool forceReauthorize)
 {
     const remote::BaiduAccountStatus account = remote::get_baidu_account_status();
-    if (account.signedIn) { return; }
+    if (account.signedIn && !forceReauthorize) { return; }
 
     const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
     if (!account.configured)
@@ -262,7 +267,7 @@ void SettingsState::handle_baidu_account_option()
             popTicks, get_baidu_string(BaiduNotConfigured, "Baidu Netdisk is not configured."));
         return;
     }
-    if (!remote::begin_baidu_netdisk_sign_in())
+    if (!remote::begin_baidu_netdisk_sign_in(forceReauthorize))
     {
         ui::PopMessageManager::push_message(
             popTicks, get_baidu_string(BaiduSignInStartFailed, "Unable to start Baidu Netdisk sign in."));
@@ -360,6 +365,7 @@ void SettingsState::toggle_options()
         case CaseIndexes::CycleScaling:  SettingsState::cycle_anim_scaling(); break;
         case CaseIndexes::BaiduAccount:  SettingsState::handle_baidu_account_option(); break;
         case CaseIndexes::BaiduSignOut:  SettingsState::confirm_baidu_sign_out(); break;
+        case CaseIndexes::BaiduSignIn:   SettingsState::handle_baidu_account_option(true); break;
         default:                         config::toggle_by_key(CONFIG_KEY_ARRAY[selected]); break;
     }
 
@@ -387,6 +393,12 @@ void SettingsState::create_push_description_message()
         description = get_baidu_string(
             BaiduSignOutDescription,
             "Clears local Baidu OAuth tokens and pauses background uploads. App credentials, settings, queued backups, and cloud files are preserved.");
+    }
+    else if (selected == CaseIndexes::BaiduSignIn)
+    {
+        description = get_baidu_string(
+            BaiduSignInDescription,
+            "Clears the previous login and opens a new login QR code, even if already signed in. Canceling leaves you signed out. Backups and app settings are preserved.");
     }
     else { description = strings::get_by_name(strings::names::SETTINGS_DESCRIPTIONS, selected); }
 
