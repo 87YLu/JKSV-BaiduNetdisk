@@ -116,6 +116,11 @@ void tasks::mainmenu::backup_all_for_all_remote(sys::threadpool::JobData taskDat
 
             remote::Item *targetDir = remote->get_directory_by_name(remoteTitle);
             remote->change_directory(targetDir);
+            if (!remote->refresh_directory())
+            {
+                remote->return_to_root();
+                continue;
+            }
 
             const char *pathSafe         = user->get_path_safe_nickname();
             const std::string dateString = stringutil::get_date_string();

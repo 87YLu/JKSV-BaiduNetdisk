@@ -103,6 +103,11 @@ void tasks::useroptions::backup_all_for_user_remote(sys::threadpool::JobData tas
 
         remote::Item *target = remote->get_directory_by_name(remoteTitle);
         remote->change_directory(target);
+        if (!remote->refresh_directory())
+        {
+            remote->return_to_root();
+            continue;
+        }
 
         const std::string dateString = stringutil::get_date_string();
 

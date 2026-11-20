@@ -40,7 +40,7 @@ INCLUDES	:=	include ./Libraries/FsLib/Switch/FsLib/include ./Libraries/SDLLib/SD
 EXEFS_SRC	:=	exefs_src
 APP_TITLE   :=  JKSV Baidu Sync
 APP_AUTHOR  :=  JK / Baidu integration
-APP_VERSION :=  1.0.3
+APP_VERSION :=  1.0.4
 ROMFS	    :=	romfs
 ICON		:=	icon.jpg
 

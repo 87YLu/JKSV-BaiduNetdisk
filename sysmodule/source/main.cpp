@@ -451,7 +451,7 @@ int main(int, char **)
     background::ensure_directory(background::QUEUE_DIRECTORY);
     background::ensure_directory(background::STATE_DIRECTORY);
     background::log(
-        "START version=1.0.3 heap=4096KiB stack=512KiB background-sync startup-grace=30s power-aware-idle");
+        "START version=1.0.4 heap=4096KiB stack=512KiB background-sync startup-grace=30s power-aware-idle");
 
     if (!handle_previous_interruption())
     {

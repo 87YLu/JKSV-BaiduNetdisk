@@ -44,6 +44,10 @@ namespace remote
             /// @param Item Item to use as the current parent directory.
             void change_directory(const remote::Item *item);
 
+            /// @brief Reloads the current directory when the provider supports on-demand listings.
+            virtual bool refresh_directory() { return true; }
+            virtual bool supports_directory_refresh() const noexcept { return false; }
+
             /// @brief Creates a directory in the current parent directory.
             /// @param name Name of the directory to create.
             virtual bool create_directory(std::string_view name) = 0;

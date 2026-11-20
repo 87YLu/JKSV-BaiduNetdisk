@@ -20,6 +20,8 @@ namespace remote
             explicit BaiduNetdisk(bool authorizeSignedOut = false);
 
             bool create_directory(std::string_view name) override;
+            bool refresh_directory() override;
+            bool supports_directory_refresh() const noexcept override { return true; }
             bool upload_file(const fslib::Path &source,
                              std::string_view name,
                              sys::ProgressTask *task = nullptr) override;
@@ -54,6 +56,7 @@ namespace remote
                 std::string path{};
                 int64_t fsId{};
                 int64_t size{};
+                int64_t modifiedTime{};
                 bool isDirectory{};
             };
 
@@ -78,10 +81,10 @@ namespace remote
 
             bool request_listing(int *errorNumber = nullptr, bool logErrors = true);
             bool request_directory_listing(std::string_view directory,
-                                           bool recursive,
                                            int *errorNumber = nullptr,
                                            bool logErrors = true);
             bool get_file_info(std::string_view path, FileInfo &fileInfo);
+            bool verify_uploaded_file(std::string_view path, int64_t size, FileInfo &fileInfo);
             bool create_directory_path(std::string_view path, FileInfo *fileInfo = nullptr);
 
             bool upload_file_internal(const fslib::Path &source,

@@ -4,9 +4,11 @@
 #include "appstates/ConfirmState.hpp"
 #include "appstates/FadeState.hpp"
 #include "appstates/ProgressState.hpp"
+#include "appstates/TaskState.hpp"
 #include "config/config.hpp"
 #include "error.hpp"
 #include "fs/fs.hpp"
+#include "fs/SaveMetaData.hpp"
 #include "fslib.hpp"
 #include "graphics/colors.hpp"
 #include "input.hpp"
@@ -19,7 +21,17 @@
 #include "ui/PopMessageManager.hpp"
 #include "ui/TextScroll.hpp"
 
+#include <algorithm>
 #include <cstring>
+
+namespace
+{
+    const char *baidu_text(int index, const char *fallback)
+    {
+        const char *text = strings::get_by_name(strings::names::BAIDU_NETDISK, index);
+        return text ? text : fallback;
+    }
+}
 
 //                      ---- Construction ----
 
@@ -58,6 +70,7 @@ void BackupMenuState::update()
     // If the panel is closed, deactivate. If it's not open, return.
     if (isClosed) { BackupMenuState::deactivate_state(); }
     else if (!isOpen) { return; }
+    if (!hasFocus) { return; }
 
     // Grab the currently selected index.
     int selected{};
@@ -72,6 +85,20 @@ void BackupMenuState::update()
     const bool xPressed  = input::button_pressed(HidNpadButton_X);
     const bool yPressed  = input::button_pressed(HidNpadButton_Y);
     const bool zrPressed = input::button_pressed(HidNpadButton_ZR);
+
+    if (selected >= 0 && static_cast<size_t>(selected) < m_menuEntries.size() &&
+        m_menuEntries[selected].type == MenuEntryType::RefreshRemote)
+    {
+        if (aPressed)
+        {
+            BackupMenuState::refresh_remote_storage();
+            return;
+        }
+        else if (bPressed) { sm_slidePanel->close(); }
+        std::lock_guard menuGuard{sm_menuMutex};
+        sm_backupMenu->update(hasFocus);
+        return;
+    }
 
     // Conditions.
     const bool newSelected     = selected == 0;
@@ -156,8 +183,24 @@ void BackupMenuState::refresh()
     sm_backupMenu->add_option(optionNew);
     m_menuEntries.push_back({MenuEntryType::Null, 0});
 
-    // Remote->Local.
-    if (remote)
+    if (remote && remote->supports_directory_refresh())
+    {
+        sm_backupMenu->add_option(baidu_text(18, "Refresh this game's cloud backups"));
+        m_menuEntries.push_back({MenuEntryType::RefreshRemote, 0});
+    }
+
+    struct BackupRow
+    {
+        MenuEntry entry;
+        std::string label;
+        int64_t modifiedTime;
+    };
+    std::vector<BackupRow> rows;
+
+    // Retain the original listing indices so every action still targets the
+    // correct backup after the display rows have been reordered.
+    m_remoteListing.clear();
+    if (remote && m_remoteDirectorySelected)
     {
         const std::string_view prefix = remote->get_prefix();
         remote->get_directory_listing(m_remoteListing);
@@ -167,16 +210,40 @@ void BackupMenuState::refresh()
             const std::string_view name = item->get_name();
             const std::string option    = stringutil::get_formatted_string("%s %s", prefix.data(), name.data());
 
-            sm_backupMenu->add_option(option);
-            m_menuEntries.push_back({MenuEntryType::Remote, index++});
+            rows.push_back({{MenuEntryType::Remote, index++}, option,
+                            item->is_directory() ? 0 : std::max<int64_t>(0, item->get_modified_time())});
         }
     }
 
     int index{};
     for (const fslib::DirectoryEntry &entry : m_directoryListing)
     {
-        sm_backupMenu->add_option(entry.get_filename());
-        m_menuEntries.push_back({MenuEntryType::Local, index++});
+        const fslib::Path path = m_directoryPath / entry;
+        FsTimeStampRaw stamp{};
+        // Overwriting files inside a folder need not update the folder's time.
+        // JKSV rewrites its metadata file for each uncompressed backup.
+        bool hasTime = entry.is_directory() &&
+                       fslib::get_file_timestamp(path / fs::NAME_SAVE_META, stamp) && stamp.is_valid && stamp.modified > 0;
+        if (!hasTime) { hasTime = fslib::get_file_timestamp(path, stamp) && stamp.is_valid && stamp.modified > 0; }
+        rows.push_back({{MenuEntryType::Local, index++}, entry.get_filename(),
+                        hasTime ? static_cast<int64_t>(stamp.modified) : 0});
+    }
+
+    std::stable_sort(rows.begin(), rows.end(), [](const BackupRow &left, const BackupRow &right)
+    {
+        return left.modifiedTime > right.modifiedTime;
+    });
+
+    const char *latest = strings::get_by_name(strings::names::BACKUPMENU_MENU, 1);
+    if (!latest) { latest = "[Latest]"; }
+    for (size_t i = 0; i < rows.size(); ++i)
+    {
+        const BackupRow &row = rows[i];
+        const std::string label = i == 0 && row.modifiedTime > 0
+                                      ? std::string(latest) + " " + row.label
+                                      : row.label;
+        sm_backupMenu->add_option(label);
+        m_menuEntries.push_back(row.entry);
     }
 }
 
@@ -245,21 +312,48 @@ void BackupMenuState::save_data_check()
     m_saveHasData = saveRoot.is_open() && saveRoot.get_count() > 0;
 }
 
-void BackupMenuState::initialize_remote_storage()
+bool BackupMenuState::initialize_remote_storage()
 {
     remote::Storage *remote = remote::get_remote_storage();
-    if (!remote) { return; }
+    if (!remote) { return false; }
 
     const bool supportsUtf8            = remote->supports_utf8();
     const std::string_view remoteTitle = supportsUtf8 ? m_titleInfo->get_title() : m_titleInfo->get_path_safe_title();
     const bool remoteDirExists         = remote->directory_exists(remoteTitle);
     const bool remoteDirCreated        = !remoteDirExists && remote->create_directory(remoteTitle);
-    if (!remoteDirExists && !remoteDirCreated) { return; }
+    if (!remoteDirExists && !remoteDirCreated) { return false; }
 
     const remote::Item *remoteDir = remote->get_directory_by_name(remoteTitle);
-    if (!remoteDir) { return; }
+    if (!remoteDir) { return false; }
 
     remote->change_directory(remoteDir);
+    m_remoteDirectorySelected = true;
+    if (!remote->refresh_directory())
+    {
+        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                           baidu_text(21, "Could not refresh cloud backups. Check connection and sign-in."));
+        return false;
+    }
+    return true;
+}
+
+void BackupMenuState::refresh_remote_storage()
+{
+    TaskState::create_push_fade([](sys::threadpool::JobData taskData)
+    {
+        auto data = std::static_pointer_cast<DataStruct>(taskData);
+        data->task->set_status(baidu_text(19, "Refreshing this game's cloud backups..."));
+        auto *storage = remote::get_remote_storage();
+        const bool refreshed = storage && (data->spawningState->m_remoteDirectorySelected
+                                              ? storage->refresh_directory()
+                                              : data->spawningState->initialize_remote_storage());
+        data->spawningState->refresh();
+        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                           baidu_text(refreshed ? 20 : 21,
+                                                      refreshed ? "Cloud backup list refreshed."
+                                                                : "Could not refresh cloud backups. Check connection and sign-in."));
+        data->task->complete();
+    }, m_dataStruct);
 }
 
 void BackupMenuState::name_and_create_backup()
@@ -277,6 +371,12 @@ void BackupMenuState::name_and_create_backup()
     const bool autoName   = config::get_by_key(config::keys::AUTO_NAME_BACKUPS);
     const bool autoUpload = config::get_by_key(config::keys::AUTO_UPLOAD);
     const bool exportZip  = autoUpload || config::get_by_key(config::keys::EXPORT_TO_ZIP);
+    if (remote && autoUpload && !m_remoteDirectorySelected)
+    {
+        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                           strings::get_by_name(strings::names::BACKUPMENU_POPS, 10));
+        return;
+    }
 
     // Input.
     const bool zrHeld = input::button_held(HidNpadButton_ZR);
@@ -484,7 +584,7 @@ void BackupMenuState::upload_backup()
 
     // Grab pointer to remote. Don't continue if it's not valid.
     remote::Storage *remote = remote::get_remote_storage();
-    if (error::is_null(remote)) { return; }
+    if (error::is_null(remote) || !m_remoteDirectorySelected) { return; }
 
     // Grab index, entry. If isn't local, it can't be uploaded.
     const int selected     = sm_backupMenu->get_selected();

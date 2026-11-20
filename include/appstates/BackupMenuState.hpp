@@ -58,7 +58,8 @@ class BackupMenuState final : public BaseState
         {
             Null,
             Local,
-            Remote
+            Remote,
+            RefreshRemote
         };
 
         /// @brief The menu entry. Stores the type and the index in the respective target (remote/local)
@@ -130,6 +131,7 @@ class BackupMenuState final : public BaseState
 
         /// @brief Variable that saves whether or not the filesystem has data in it.
         bool m_saveHasData{};
+        bool m_remoteDirectorySelected{};
 
         /// @brief Data struct passed to functions.
         std::shared_ptr<BackupMenuState::DataStruct> m_dataStruct{};
@@ -171,7 +173,8 @@ class BackupMenuState final : public BaseState
         void save_data_check();
 
         /// @brief Ensures the remote storage is initalized and pointing to the right place.
-        void initialize_remote_storage();
+        bool initialize_remote_storage();
+        void refresh_remote_storage();
 
         /// @brief This is the function called when New Backup is selected.
         void name_and_create_backup();

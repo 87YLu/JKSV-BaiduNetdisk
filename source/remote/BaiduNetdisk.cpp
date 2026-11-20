@@ -447,7 +447,7 @@ remote::BaiduNetdisk::BaiduNetdisk(bool authorizeSignedOut)
             m_isInitialized = BaiduNetdisk::initialize_storage();
         }
 
-        if (m_isInitialized)
+        if (m_isInitialized && m_accountName.empty())
         {
             const std::string previousAccountName = m_accountName;
             if (BaiduNetdisk::request_account_info() && m_accountName != previousAccountName)
@@ -490,7 +490,7 @@ bool remote::BaiduNetdisk::upload_file(const fslib::Path &source,
     if (!BaiduNetdisk::upload_file_internal(source, remotePath, false, task, uploaded)) { return false; }
 
     if (uploaded.fsId > 0) { m_fsIds[uploaded.path] = uploaded.fsId; }
-    m_list.emplace_back(uploaded.name, uploaded.path, m_parent, uploaded.size, false);
+    m_list.emplace_back(uploaded.name, uploaded.path, m_parent, uploaded.size, false, uploaded.modifiedTime);
     return true;
 }
 
@@ -507,6 +507,7 @@ bool remote::BaiduNetdisk::patch_file(remote::Item *file,
     if (uploaded.fsId > 0) { m_fsIds[path] = uploaded.fsId; }
     else { m_fsIds.erase(path); }
     file->set_size(static_cast<size_t>(std::max<int64_t>(0, uploaded.size)));
+    file->set_modified_time(uploaded.modifiedTime);
     return true;
 }
 
@@ -779,7 +780,9 @@ bool remote::BaiduNetdisk::poll_sign_in(std::string_view deviceCode)
     }
 
     m_isInitialized = BaiduNetdisk::initialize_storage();
-    return m_isInitialized;
+    // The device code has been consumed and the tokens persisted. A directory
+    // error must not keep polling that code until the QR screen expires.
+    return true;
 }
 
 bool remote::BaiduNetdisk::initialize_storage()
@@ -946,18 +949,25 @@ bool remote::BaiduNetdisk::request_listing(int *errorNumber, bool logErrors)
 {
     if (!BaiduNetdisk::ensure_token()) { return false; }
 
-    m_list.clear();
-    m_fsIds.clear();
     m_parent = m_root;
-    return BaiduNetdisk::request_directory_listing(m_root, true, errorNumber, logErrors);
+    return BaiduNetdisk::request_directory_listing(m_root, errorNumber, logErrors);
+}
+
+bool remote::BaiduNetdisk::refresh_directory()
+{
+    if (!BaiduNetdisk::ensure_token()) { return false; }
+    if (BaiduNetdisk::request_directory_listing(m_parent)) { return true; }
+    // Recover an access token revoked before its advertised expiration once.
+    return !BaiduNetdisk::token_is_valid() && BaiduNetdisk::refresh_token() &&
+           BaiduNetdisk::request_directory_listing(m_parent);
 }
 
 bool remote::BaiduNetdisk::request_directory_listing(std::string_view directory,
-                                                      bool recursive,
                                                       int *errorNumber,
                                                       bool logErrors)
 {
-    std::vector<std::string> childDirectories{};
+    List listing{};
+    std::unordered_map<std::string, int64_t> fsIds{};
     int start{};
 
     while (true)
@@ -995,22 +1005,25 @@ bool remote::BaiduNetdisk::request_directory_listing(std::string_view directory,
             const bool isDirectory  = get_json_int64(entry, "isdir") == 1;
             if (path.empty() || name.empty()) { continue; }
 
-            m_fsIds[path] = fsId;
-            m_list.emplace_back(name, path, directory, size, isDirectory);
-            if (isDirectory) { childDirectories.push_back(path); }
+            fsIds[path] = fsId;
+            const int64_t modifiedTime = get_json_int64(entry, "server_mtime");
+            listing.emplace_back(name, path, directory, size, isDirectory,
+                                 modifiedTime > 0 ? modifiedTime : get_json_int64(entry, "local_mtime"));
         }
 
         start += static_cast<int>(listLength);
         if (listLength < LIST_PAGE_SIZE) { break; }
     }
 
-    if (recursive)
+    // Commit only after every page succeeds, preserving the old list on failure.
+    m_list.erase(std::remove_if(m_list.begin(), m_list.end(), [&](const Item &item)
     {
-        for (const std::string &child : childDirectories)
-        {
-            if (!BaiduNetdisk::request_directory_listing(child, true, errorNumber, logErrors)) { return false; }
-        }
-    }
+        if (item.get_parent_id() != directory) { return false; }
+        m_fsIds.erase(std::string(item.get_id()));
+        return true;
+    }), m_list.end());
+    for (auto &item : listing) { m_list.push_back(std::move(item)); }
+    for (const auto &[path, fsId] : fsIds) { m_fsIds[path] = fsId; }
     return true;
 }
 
@@ -1045,14 +1058,34 @@ bool remote::BaiduNetdisk::get_file_info(std::string_view path, FileInfo &fileIn
             fileInfo.name        = get_json_string(entry, "server_filename");
             fileInfo.path        = itemPath;
             fileInfo.fsId        = get_json_int64(entry, "fs_id");
-            fileInfo.size        = get_json_int64(entry, "size");
-            fileInfo.isDirectory = get_json_int64(entry, "isdir") == 1;
+            fileInfo.size        = get_json_int64(entry, "size", -1);
+            fileInfo.modifiedTime = get_json_int64(entry, "server_mtime");
+            if (fileInfo.modifiedTime <= 0) { fileInfo.modifiedTime = get_json_int64(entry, "local_mtime"); }
+            fileInfo.isDirectory = get_json_int64(entry, "isdir", 1) != 0;
             return true;
         }
 
         start += static_cast<int>(listLength);
         if (listLength < LIST_PAGE_SIZE) { break; }
     }
+    return false;
+}
+
+bool remote::BaiduNetdisk::verify_uploaded_file(std::string_view path, int64_t size, FileInfo &fileInfo)
+{
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        if (attempt) { std::this_thread::sleep_for(std::chrono::seconds(1 << (attempt - 1))); }
+        FileInfo verified{};
+        if (BaiduNetdisk::get_file_info(path, verified) && verified.fsId > 0 &&
+            !verified.isDirectory && verified.size == size)
+        {
+            fileInfo = std::move(verified);
+            return true;
+        }
+    }
+    logger::log("Baidu Netdisk upload could not be verified at %.*s; local backup retained.",
+                static_cast<int>(path.size()), path.data());
     return false;
 }
 
@@ -1184,31 +1217,7 @@ bool remote::BaiduNetdisk::upload_file_internal(const fslib::Path &source,
     const int returnType = static_cast<int>(get_json_int64(precreateParser.get(), "return_type"));
     if (returnType == 2)
     {
-        json_object *rapidInfo = get_json_object(precreateParser.get(), "info");
-        if (rapidInfo)
-        {
-            uploadedFile.name        = get_json_string(rapidInfo, "server_filename");
-            if (uploadedFile.name.empty()) { uploadedFile.name = filename_from_path(remotePath); }
-            uploadedFile.path        = get_json_string(rapidInfo, "path");
-            if (uploadedFile.path.empty()) { uploadedFile.path = remotePath; }
-            uploadedFile.fsId        = get_json_int64(rapidInfo, "fs_id");
-            uploadedFile.size        = get_json_int64(rapidInfo, "size", fileSize);
-            uploadedFile.isDirectory = false;
-            if (uploadedFile.fsId == 0)
-            {
-                FileInfo refreshed{};
-                if (BaiduNetdisk::get_file_info(remotePath, refreshed)) { uploadedFile = std::move(refreshed); }
-            }
-            return true;
-        }
-        if (BaiduNetdisk::get_file_info(remotePath, uploadedFile)) { return true; }
-
-        uploadedFile.name = filename_from_path(remotePath);
-        uploadedFile.path = remotePath;
-        uploadedFile.size = fileSize;
-        const auto existingFsId = m_fsIds.find(uploadedFile.path);
-        if (existingFsId != m_fsIds.end()) { uploadedFile.fsId = existingFsId->second; }
-        return true;
+        return BaiduNetdisk::verify_uploaded_file(remotePath, fileSize, uploadedFile);
     }
 
     const std::string uploadId = get_json_string(precreateParser.get(), "uploadid");
@@ -1289,13 +1298,7 @@ bool remote::BaiduNetdisk::upload_file_internal(const fslib::Path &source,
     json::Object createParser{nullptr, json_object_put};
     if (!BaiduNetdisk::response_succeeded(createResponse, "upload create", createParser)) { return false; }
 
-    uploadedFile.path = get_json_string(createParser.get(), "path");
-    if (uploadedFile.path.empty()) { uploadedFile.path = remotePath; }
-    uploadedFile.name = get_json_string(createParser.get(), "server_filename");
-    if (uploadedFile.name.empty()) { uploadedFile.name = filename_from_path(uploadedFile.path); }
-    uploadedFile.fsId        = get_json_int64(createParser.get(), "fs_id");
-    uploadedFile.size        = get_json_int64(createParser.get(), "size", fileSize);
-    uploadedFile.isDirectory = false;
+    if (!BaiduNetdisk::verify_uploaded_file(remotePath, fileSize, uploadedFile)) { return false; }
     if (task) { task->update_current(static_cast<double>(fileSize)); }
     return true;
 }
@@ -1362,6 +1365,8 @@ bool remote::BaiduNetdisk::perform_get(std::string_view baseUrl,
     curl::prepare_get(m_curl);
     curl::set_option(m_curl, CURLOPT_URL, url.c_str());
     if (!userAgent.empty()) { curl::set_option(m_curl, CURLOPT_USERAGENT, userAgent.data()); }
+    // Bound login and directory requests without limiting file transfers.
+    curl::set_option(m_curl, CURLOPT_TIMEOUT, 30L);
     curl::set_option(m_curl, CURLOPT_WRITEFUNCTION, curl::write_response_string);
     curl::set_option(m_curl, CURLOPT_WRITEDATA, &response);
     return curl::perform(m_curl);

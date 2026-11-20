@@ -95,6 +95,13 @@ void tasks::titleoptions::delete_all_remote_backups_for_title(sys::threadpool::J
     remote::Item *workDir = remote->get_directory_by_name(remoteTitle);
     if (!workDir) { TASK_FINISH_RETURN(task); }
     remote->change_directory(workDir);
+    if (!remote->refresh_directory())
+    {
+        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                           strings::get_by_name(strings::names::TITLEOPTION_POPS, 1));
+        remote->return_to_root();
+        TASK_FINISH_RETURN(task);
+    }
 
     remote::Storage::DirectoryListing remoteListing{};
     remote->get_directory_listing(remoteListing);

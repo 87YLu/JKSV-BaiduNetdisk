@@ -3,7 +3,8 @@
         "0: *Warning*: Applet mode detected. Unexpected behavior may occur!"
     ],
     "BackupMenu": [
-        "0: New Backup"
+        "0: New Backup",
+        "1: [Latest]"
     ],
     "BackupMenuConfirmations": [
         "0: Are you sure you really want to overwrite #%s#?",
@@ -113,7 +114,12 @@
         "14: Unable to start Baidu Netdisk sign in. Check the configuration and network connection.",
         "15: No Baidu Netdisk account is currently signed in.",
         "16: Sign in again to Baidu Netdisk (QR code)",
-        "17: Clears the previous login and opens a new login QR code, even if already signed in. Canceling leaves you signed out. Backups and app settings are preserved."
+        "17: Clears the previous login and opens a new login QR code, even if already signed in. Canceling leaves you signed out. Backups and app settings are preserved.",
+        "18: Refresh this game's cloud backups [A]",
+        "19: Refreshing this game's cloud backups...",
+        "20: Cloud backup list refreshed.",
+        "21: Could not refresh cloud backups. Check your connection and sign-in, then try again.",
+        "22: Authorization saved, but cloud folders could not be loaded. Check your connection and reopen JKSV."
     ],
     "GoogleDriveStrings": [
         "0: To continue, go to #%s# and enter >%s>!",

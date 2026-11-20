@@ -335,7 +335,8 @@ static void baidu_sign_in(sys::threadpool::JobData taskData)
 
     task->set_status(message);
     if (!qrImage.empty()) { task->set_image(std::move(qrImage)); }
-    while (std::time(nullptr) < expiration && !baidu->poll_sign_in(deviceCode))
+    bool authorized{};
+    while (std::time(nullptr) < expiration && !(authorized = baidu->poll_sign_in(deviceCode)))
     {
         const bool bPressed = input::button_pressed(HidNpadButton_B);
         const bool bHeld    = input::button_held(HidNpadButton_B);
@@ -344,8 +345,9 @@ static void baidu_sign_in(sys::threadpool::JobData taskData)
     }
 
     const bool initialized  = baidu->is_initialized();
-    const char *popMessage = strings::get_by_name(strings::names::BAIDU_NETDISK, initialized ? 1 : 2);
+    const char *popMessage = strings::get_by_name(strings::names::BAIDU_NETDISK, initialized ? 1 : authorized ? 22 : 2);
     const char *fallback   = initialized ? "Successfully signed in to Baidu Netdisk!"
+                            : authorized ? "Authorization saved; cloud folders unavailable. Check connection and reopen JKSV."
                                          : "Baidu Netdisk sign in failed!";
     ui::PopMessageManager::push_message(popTicks, popMessage ? popMessage : fallback);
     task->complete();

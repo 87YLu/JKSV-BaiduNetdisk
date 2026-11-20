@@ -55,6 +55,7 @@ namespace background
             bool ensure_remote_parent(std::string_view remotePath);
             bool create_directory(std::string_view path);
             bool upload_file_once(std::string_view localPath, std::string_view remotePath);
+            bool verify_uploaded_file(std::string_view remotePath, uint64_t fileSize);
             bool upload_slice(FILE *source,
                               uint64_t offset,
                               size_t length,

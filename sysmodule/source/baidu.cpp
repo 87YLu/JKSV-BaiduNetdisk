@@ -701,8 +701,9 @@ bool background::BaiduClient::parse_response(Response &response,
                                               bool allowAlreadyExists)
 {
     json_object *parser = json_tokener_parse(response.body.c_str());
-    if (!parser)
+    if (!parser || !json_object_is_type(parser, json_type_object))
     {
+        if (parser) { json_object_put(parser); }
         response.errorNumber = std::numeric_limits<int>::min();
         set_error(context, &response);
         return false;
@@ -941,7 +942,7 @@ bool background::BaiduClient::upload_file_once(std::string_view localPath, std::
         json_object_to_json_string_ext(blockList, JSON_C_TO_STRING_PLAIN);
 
     const Parameters precreateQuery = {{"method", "precreate"}};
-    const Parameters precreateForm = {{"path", std::string(remotePath)},
+    Parameters precreateForm = {{"path", std::string(remotePath)},
                                       {"size", std::to_string(fileSize)},
                                       {"isdir", "0"},
                                       {"autoinit", "1"},
@@ -949,24 +950,29 @@ bool background::BaiduClient::upload_file_once(std::string_view localPath, std::
                                       {"block_list", blockListText},
                                       {"content-md5", contentMd5},
                                       {"slice-md5", sliceMd5}};
-    Response precreateResponse{};
-    if (!post_form(URL_BAIDU_API, ENDPOINT_FILE, precreateQuery, precreateForm, precreateResponse))
-    {
-        json_object_put(blockList);
-        return false;
-    }
-
     json_object *precreate{};
-    if (!parse_response(precreateResponse, "upload precreate", &precreate))
+    for (int attempt = 0; attempt < 2; ++attempt)
     {
-        json_object_put(blockList);
-        return false;
-    }
-    if (get_int64(precreate, "return_type") == 2)
-    {
+        Response precreateResponse{};
+        if (!post_form(URL_BAIDU_API, ENDPOINT_FILE, precreateQuery, precreateForm, precreateResponse) ||
+            !parse_response(precreateResponse, "upload precreate", &precreate))
+        {
+            json_object_put(blockList);
+            return false;
+        }
+        if (get_int64(precreate, "return_type") != 2) { break; }
         json_object_put(precreate);
-        json_object_put(blockList);
-        return true;
+        precreate = nullptr;
+        const bool verified = verify_uploaded_file(remotePath, fileSize);
+        if (verified || attempt == 1 || m_tokenExpires == 0)
+        {
+            json_object_put(blockList);
+            return verified;
+        }
+        // Retry once without the optional rapid-upload hashes. Keep the same
+        // destination and overwrite policy, so recovery cannot rename the ZIP.
+        background::logf("RAPID_UPLOAD_UNVERIFIED retry=normal error=%s", m_lastError.c_str());
+        precreateForm.resize(precreateForm.size() - 2);
     }
 
     const std::string uploadId = get_string(precreate, "uploadid");
@@ -1035,5 +1041,67 @@ bool background::BaiduClient::upload_file_once(std::string_view localPath, std::
         post_form(URL_BAIDU_API, ENDPOINT_FILE, createQuery, createForm, createResponse);
     json_object_put(blockList);
     if (!requested) { return false; }
-    return parse_response(createResponse, "upload create", nullptr);
+    return parse_response(createResponse, "upload create", nullptr) &&
+           verify_uploaded_file(remotePath, fileSize);
+}
+
+bool background::BaiduClient::verify_uploaded_file(std::string_view remotePath, uint64_t fileSize)
+{
+    // A successful upload response alone must never remove the pending local ZIP.
+    // Query the actual destination, including after rapid upload, before reporting success.
+    constexpr size_t pageSize = 100;
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        if (attempt) { background::sleep_seconds(1U << (attempt - 1)); }
+        for (size_t start = 0;; start += pageSize)
+        {
+            const Parameters parameters = {{"method", "list"},
+                                           {"dir", parent_path(remotePath)},
+                                           {"order", "name"},
+                                           {"start", std::to_string(start)},
+                                           {"limit", std::to_string(pageSize)}};
+            Response response{};
+            if (!get(URL_BAIDU_API, ENDPOINT_FILE, parameters, response)) { return false; }
+            json_object *parser{};
+            if (!parse_response(response, "upload verification", &parser)) { return false; }
+            json_object *list = get_object(parser, "list");
+            if (!list || !json_object_is_type(list, json_type_array))
+            {
+                json_object_put(parser);
+                m_lastError = "upload verification returned no file list; local backup retained";
+                return false;
+            }
+            const size_t count = json_object_array_length(list);
+            for (size_t index = 0; index < count; ++index)
+            {
+                json_object *entry = json_object_array_get_idx(list, index);
+                if (get_string(entry, "path") != remotePath) { continue; }
+                const int64_t fsId = get_int64(entry, "fs_id");
+                json_object *size = get_object(entry, "size");
+                json_object *isDir = get_object(entry, "isdir");
+                const bool verified = fsId > 0 && size && isDir &&
+                                      json_object_is_type(size, json_type_int) &&
+                                      json_object_is_type(isDir, json_type_int) &&
+                                      json_object_get_int64(isDir) == 0 &&
+                                      json_object_get_int64(size) >= 0 &&
+                                      static_cast<uint64_t>(json_object_get_int64(size)) == fileSize;
+                json_object_put(parser);
+                if (!verified)
+                {
+                    m_lastError = "uploaded destination metadata does not match; local backup retained";
+                    return false;
+                }
+                background::logf("UPLOAD_VERIFIED fs_id=%lld size=%llu remote=%.*s",
+                                static_cast<long long>(fsId),
+                                static_cast<unsigned long long>(fileSize),
+                                static_cast<int>(remotePath.size()), remotePath.data());
+                m_lastError.clear();
+                return true;
+            }
+            json_object_put(parser);
+            if (count < pageSize) { break; }
+        }
+    }
+    m_lastError = "upload reported success but destination file was not found; local backup retained";
+    return false;
 }

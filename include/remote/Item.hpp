@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 
 namespace remote
@@ -12,7 +13,8 @@ namespace remote
             /// @param parent Item's parent.
             /// @param size Size of the time.
             /// @param directory Whether or not the item is a directory.
-            Item(std::string_view name, std::string_view id, std::string_view parent, size_t size, bool directory);
+            Item(std::string_view name, std::string_view id, std::string_view parent, size_t size, bool directory,
+                 int64_t modifiedTime = 0);
 
             /// @brief Returns the name of the item.
             /// @return Name of the item.
@@ -29,6 +31,10 @@ namespace remote
             /// @brief Gets the size of the item.
             /// @return Size of the item in bytes.
             size_t get_size() const noexcept;
+
+            /// @brief Modification time in Unix seconds, or zero when unavailable.
+            int64_t get_modified_time() const noexcept;
+            void set_modified_time(int64_t modifiedTime) noexcept;
 
             /// @brief Returns whether or not the item is a directory.
             /// @return Whether or not the item is a directory.
@@ -66,6 +72,7 @@ namespace remote
 
             /// @brief Size of the item.
             size_t m_size{};
+            int64_t m_modifiedTime{};
 
             /// @brief Whether or not the item is a directory.
             bool m_isDirectory{};

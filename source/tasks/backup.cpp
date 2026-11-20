@@ -256,6 +256,11 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
     // Patch the backup.
     const bool uploaded = remote->patch_file(target, tempPath, task);
     if (uploaded) { push_upload_success(); }
+    else
+    {
+        ui::PopMessageManager::push_message(POP_TICKS, strings::get_by_name(strings::names::BACKUPMENU_POPS, 10));
+        TASK_FINISH_RETURN(task);
+    }
 
     // Delete the temporary local backup.
     const bool deleteError = error::fslib(fslib::delete_file(tempPath));
@@ -265,6 +270,7 @@ void tasks::backup::overwrite_backup_remote(sys::threadpool::JobData taskData)
         ui::PopMessageManager::push_message(POP_TICKS, popErrorDeleting);
     }
 
+    if (castData->spawningState) { castData->spawningState->refresh(); }
     task->complete();
 }
 
@@ -635,7 +641,11 @@ void tasks::backup::patch_backup(sys::threadpool::JobData taskData)
     }
 
     const bool uploaded = remote->patch_file(remoteItem, path, task);
-    if (uploaded) { push_upload_success(); }
+    if (uploaded)
+    {
+        push_upload_success();
+        spawningState->refresh();
+    }
     task->complete();
 }
 
