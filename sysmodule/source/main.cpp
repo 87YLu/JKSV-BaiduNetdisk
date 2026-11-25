@@ -1,320 +1,134 @@
 #include "common.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace background
-{
-    std::atomic<uint64_t> g_runningTitleId{};
-    std::atomic<uint64_t> g_pendingTitleId{};
-    std::atomic<bool> g_shutdownRequested{};
-}
+// This is the worker. It's started by the resident monitor (sysmodule/monitor) when a game closes or a retry is due,
+// does one pass and exits. Everything it allocates, curl and TLS included, is gone again once it returns.
+
+#ifndef APP_VERSION
+#define APP_VERSION "dev"
+#endif
 
 namespace
 {
     // minizip's zipOpen3 currently has a ~66 KiB stack frame and curl/TLS needs
-    // considerably more than the old 1 MiB heap once an upload starts.
+    // considerably more than the old 1 MiB heap once an upload starts. This is
+    // only allocated while the worker is running.
     constexpr size_t INNER_HEAP_SIZE = 0x400000;
-    constexpr int64_t STARTUP_GRACE_NS = 30'000'000'000LL;
-    // These intervals are only used when the process-event observer is not
-    // available (for example on pre-10.0.0 firmware).
-    constexpr int64_t MONITOR_ACTIVE_POLL_NS = 1'000'000'000LL;
-    constexpr int64_t MONITOR_IDLE_POLL_NS   = 5'000'000'000LL;
-    constexpr uint64_t MONITOR_EVENT_RECONCILE_NS = 900'000'000'000ULL;
-    constexpr int64_t MONITOR_QUERY_RETRY_NS       = 250'000'000LL;
-    constexpr uint64_t MAIN_MAINTENANCE_WAIT_NS    = 900'000'000'000ULL;
-    constexpr uint64_t MAIN_FALLBACK_POLL_NS       = 30'000'000'000ULL;
-    constexpr uint64_t MAX_RETRY_BACKOFF_SECONDS   = 60 * 60;
+    constexpr uint64_t MAX_RETRY_BACKOFF_SECONDS = 60 * 60;
     constexpr const char *INTERRUPTED_MARKER_PATH =
         "sdmc:/config/JKSV/background/.interrupted";
+
+    // How long JKSV gets before the worker tries again when it finds JKSV open.
+    constexpr unsigned long long JKSV_RUNNING_RETRY_SECONDS = 5 * 60;
+
+    // Boot times worked out from the clock and uptime drift a little, and the clock can be corrected by the network.
+    constexpr long long SAME_BOOT_TOLERANCE_SECONDS = 120;
 
     bool s_nsReady{};
     bool s_accountReady{};
     bool s_setReady{};
     bool s_pmdmntReady{};
-    bool s_pminfoReady{};
-    Thread s_monitorThread{};
-    alignas(0x1000) uint8_t s_monitorStack[0x4000]{};
-    Event s_workEvent{};
-    bool s_workEventReady{};
-    PglEventObserver s_processObserver{};
-    Event s_processEvent{};
-    bool s_pglReady{};
-    bool s_processObserverReady{};
-    bool s_processEventReady{};
-
-    struct MonitorState
-    {
-        uint64_t pid{};
-        uint64_t title{};
-        int runningTicks{};
-    };
-
-    void wait_for_work(uint64_t timeoutNs)
-    {
-        if (s_workEventReady) { eventWait(&s_workEvent, timeoutNs); }
-        else
-        {
-            const uint64_t fallback = std::min(timeoutNs, MAIN_FALLBACK_POLL_NS);
-            svcSleepThread(static_cast<int64_t>(fallback));
-        }
-    }
-
-    bool valid_game_title(uint64_t titleId)
-    {
-        return titleId >= 0x0100000000010000ULL && titleId < 0x0200000000000000ULL;
-    }
+    bool s_pdmReady{};
 
     bool initialize_title_services()
     {
-        if (s_nsReady && s_accountReady && s_setReady && s_pmdmntReady && s_pminfoReady) { return true; }
-
-        if (!s_nsReady) { s_nsReady = R_SUCCEEDED(nsInitialize()); }
-        if (!s_accountReady)
-        {
-            s_accountReady = R_SUCCEEDED(accountInitialize(AccountServiceType_System));
-        }
-        if (!s_setReady) { s_setReady = R_SUCCEEDED(setInitialize()); }
-        if (!s_pmdmntReady) { s_pmdmntReady = R_SUCCEEDED(pmdmntInitialize()); }
-        if (!s_pminfoReady) { s_pminfoReady = R_SUCCEEDED(pminfoInitialize()); }
-        return s_nsReady && s_accountReady && s_setReady && s_pmdmntReady && s_pminfoReady;
+        s_nsReady      = R_SUCCEEDED(nsInitialize());
+        s_accountReady = R_SUCCEEDED(accountInitialize(AccountServiceType_System));
+        s_setReady     = R_SUCCEEDED(setInitialize());
+        s_pmdmntReady  = R_SUCCEEDED(pmdmntInitialize());
+        s_pdmReady     = R_SUCCEEDED(pdmqryInitialize());
+        return s_nsReady && s_accountReady && s_setReady && s_pmdmntReady && s_pdmReady;
     }
 
-    bool initialize_process_events()
+    bool same_boot(long long bootEpoch)
     {
-        Result result = pglInitialize();
-        if (R_FAILED(result))
-        {
-            background::logf("MONITOR_EVENTS_UNAVAILABLE stage=pgl result=0x%08X", result);
-            return false;
-        }
-        s_pglReady = true;
-
-        result = pglGetEventObserver(&s_processObserver);
-        if (R_FAILED(result))
-        {
-            background::logf("MONITOR_EVENTS_UNAVAILABLE stage=observer result=0x%08X", result);
-            pglExit();
-            s_pglReady = false;
-            return false;
-        }
-        s_processObserverReady = true;
-
-        result = pglEventObserverGetProcessEvent(&s_processObserver, &s_processEvent);
-        if (R_FAILED(result))
-        {
-            background::logf("MONITOR_EVENTS_UNAVAILABLE stage=event result=0x%08X", result);
-            pglEventObserverClose(&s_processObserver);
-            s_processObserverReady = false;
-            pglExit();
-            s_pglReady = false;
-            return false;
-        }
-        s_processEventReady = true;
-        return true;
+        return std::llabs(bootEpoch - static_cast<long long>(background::boot_epoch())) <= SAME_BOOT_TOLERANCE_SECONDS;
     }
 
-    void signal_closed_title(uint64_t titleId)
-    {
-        if (valid_game_title(titleId))
-        {
-            uint64_t empty{};
-            const bool queued = background::g_pendingTitleId.compare_exchange_strong(
-                empty, titleId, std::memory_order_release, std::memory_order_relaxed);
-            if (!queued)
-            {
-                background::logf("GAME_CLOSE_DEFERRED title=%016llX pending=%016llX",
-                                 static_cast<unsigned long long>(titleId),
-                                 static_cast<unsigned long long>(empty));
-            }
-        }
-        // Wake the main loop even when another title is already pending. This
-        // also resumes retries after a non-game application closes.
-        if (s_workEventReady) { eventFire(&s_workEvent); }
-    }
-
-    void close_monitored_application(MonitorState &state, bool anotherApplicationRunning = false)
-    {
-        const uint64_t closedTitle = state.title;
-        const bool shouldWake = state.pid != 0 && state.runningTicks >= 2;
-        state = {};
-        // Publish the state before firing the work event. When applications
-        // transition directly, keep a sentinel set so queue work stays blocked.
-        background::g_runningTitleId.store(anotherApplicationRunning ? 1 : 0,
-                                           std::memory_order_release);
-        if (shouldWake)
-        {
-            if (closedTitle != 0)
-            {
-                background::logf("GAME_CLOSE title=%016llX",
-                                 static_cast<unsigned long long>(closedTitle));
-            }
-            signal_closed_title(closedTitle);
-        }
-    }
-
-    void observe_running_application(MonitorState &state, uint64_t pid, bool eventConfirmed)
-    {
-        if (pid == 0) { return; }
-        if (pid != state.pid)
-        {
-            if (state.pid != 0) { close_monitored_application(state, true); }
-            state.pid = pid;
-            pminfoGetProgramId(&state.title, pid);
-            background::logf("GAME_START title=%016llX",
-                             static_cast<unsigned long long>(state.title));
-        }
-        else if (state.title == 0)
-        {
-            pminfoGetProgramId(&state.title, pid);
-        }
-
-        if (eventConfirmed) { state.runningTicks = std::max(state.runningTicks, 2); }
-        else { ++state.runningTicks; }
-        background::g_runningTitleId.store(state.title != 0 ? state.title : 1,
-                                           std::memory_order_release);
-    }
-
-    bool query_application_pid(uint64_t &pid)
-    {
-        pid = 0;
-        return R_SUCCEEDED(pmdmntGetApplicationProcessId(&pid)) && pid != 0;
-    }
-
-    void reconcile_event_monitor(MonitorState &state, bool eventTriggered)
-    {
-        uint64_t pid{};
-        if (!query_application_pid(pid) && (eventTriggered || state.pid != 0))
-        {
-            svcSleepThread(MONITOR_QUERY_RETRY_NS);
-            query_application_pid(pid);
-        }
-
-        if (pid != 0) { observe_running_application(state, pid, true); }
-        else if (state.pid != 0) { close_monitored_application(state); }
-        else { background::g_runningTitleId.store(0, std::memory_order_release); }
-    }
-
-    bool drain_process_events()
-    {
-        bool received{};
-        for (int index = 0; index < 64; ++index)
-        {
-            PmProcessEventInfo info{};
-            const Result result = pglEventObserverGetProcessEventInfo(&s_processObserver, &info);
-            if (R_FAILED(result)) { return received; }
-            if (info.event == PmProcessEvent_None) { return true; }
-            received = true;
-        }
-        return true;
-    }
-
-    bool monitor_with_process_events(MonitorState &state)
-    {
-        reconcile_event_monitor(state, false);
-        int failureCount{};
-
-        while (!background::g_shutdownRequested.load(std::memory_order_acquire))
-        {
-            const Result result = eventWait(&s_processEvent, MONITOR_EVENT_RECONCILE_NS);
-            const bool timedOut = R_VALUE(result) == R_VALUE(KERNELRESULT(TimedOut));
-            if (R_SUCCEEDED(result))
-            {
-                if (!drain_process_events())
-                {
-                    ++failureCount;
-                    background::logf("MONITOR_EVENT_READ_FAILED count=%d", failureCount);
-                }
-                else { failureCount = 0; }
-                reconcile_event_monitor(state, true);
-            }
-            else if (timedOut)
-            {
-                failureCount = 0;
-                reconcile_event_monitor(state, false);
-            }
-            else
-            {
-                ++failureCount;
-                background::logf("MONITOR_EVENT_WAIT_FAILED result=0x%08X count=%d", result, failureCount);
-            }
-
-            if (failureCount >= 3)
-            {
-                background::log("MONITOR_MODE fallback=polling reason=event-errors");
-                return false;
-            }
-        }
-        return true;
-    }
-
-    void monitor_with_polling(MonitorState state)
-    {
-        int failureCount{};
-
-        while (!background::g_shutdownRequested.load(std::memory_order_acquire))
-        {
-            uint64_t pid{};
-            const Result result = pmdmntGetApplicationProcessId(&pid);
-            if (R_SUCCEEDED(result) && pid != 0)
-            {
-                failureCount = 0;
-                observe_running_application(state, pid, false);
-            }
-            else
-            {
-                ++failureCount;
-                if (failureCount >= 2)
-                {
-                    close_monitored_application(state);
-                    failureCount = 0;
-                }
-            }
-            svcSleepThread(state.pid != 0 ? MONITOR_ACTIVE_POLL_NS : MONITOR_IDLE_POLL_NS);
-        }
-    }
-
-    void game_monitor(void *)
-    {
-        MonitorState state{};
-        if (s_processEventReady && monitor_with_process_events(state)) { return; }
-        monitor_with_polling(state);
-    }
-
+    // Markers hold the time the console booted, so the next run can tell a crash from a power-off.
     bool write_marker(const char *path)
     {
         FILE *file = std::fopen(path, "wb");
         if (!file) { return false; }
-        const std::time_t now = std::time(nullptr);
-        const bool success = std::fprintf(file, "%lld\n", static_cast<long long>(now)) > 0 &&
+        const bool success = std::fprintf(file, "%lld\n", static_cast<long long>(background::boot_epoch())) > 0 &&
                              std::fflush(file) == 0;
         std::fclose(file);
         return success;
     }
 
-    bool handle_previous_interruption()
+    bool read_marker(const char *path, long long &bootEpoch)
     {
-        if (!background::file_exists(background::RUN_MARKER_PATH)) { return true; }
+        FILE *file = std::fopen(path, "rb");
+        if (!file) { return false; }
+        const bool read = std::fscanf(file, "%lld", &bootEpoch) == 1;
+        std::fclose(file);
+        return read;
+    }
 
-        background::remove_file(background::RUN_MARKER_PATH);
-        if (!background::file_exists(INTERRUPTED_MARKER_PATH))
+    /// @return False if the worker should stay disabled.
+    bool check_disabled_state()
+    {
+        if (!background::file_exists(background::BOOT_FLAG_CRASHED_PATH)) { return true; }
+
+        // JKSV re-enables the worker by putting boot2.flag back. Start counting interruptions over from there.
+        if (background::file_exists(background::BOOT_FLAG_PATH))
         {
-            write_marker(INTERRUPTED_MARKER_PATH);
-            background::log("RECOVERY previous operation was interrupted; queued files were preserved");
+            background::remove_file(background::BOOT_FLAG_CRASHED_PATH);
+            background::remove_file(background::RUN_MARKER_PATH);
+            background::remove_file(INTERRUPTED_MARKER_PATH);
+            background::log("REENABLED boot2.flag was restored");
             return true;
         }
 
-        background::log("SELF_DISABLE two consecutive operations were interrupted");
+        background::log("IDLE sysmodule disabled; re-enable it in JKSV's settings");
+        return false;
+    }
+
+    bool handle_previous_interruption()
+    {
+        long long bootEpoch{};
+        if (!read_marker(background::RUN_MARKER_PATH, bootEpoch))
+        {
+            background::remove_file(background::RUN_MARKER_PATH);
+            return true;
+        }
+        background::remove_file(background::RUN_MARKER_PATH);
+
+        // Turning the console off in the middle of an upload isn't the worker's fault. Only a run that ended while the
+        // console stayed on means the worker itself crashed.
+        if (!same_boot(bootEpoch))
+        {
+            background::log("RECOVERY previous run was cut off by a reboot; queued files were preserved");
+            return true;
+        }
+
+        if (!background::file_exists(INTERRUPTED_MARKER_PATH))
+        {
+            write_marker(INTERRUPTED_MARKER_PATH);
+            background::log("RECOVERY previous run crashed; queued files were preserved");
+            return true;
+        }
+
+        background::log("SELF_DISABLE two consecutive runs crashed");
         if (::rename(background::BOOT_FLAG_PATH, background::BOOT_FLAG_CRASHED_PATH) != 0 && errno != ENOENT)
         {
             background::logf("SELF_DISABLE_FAILED errno=%d", errno);
         }
+        else
+        {
+            // The monitor stops starting the worker once boot2.flag.crashed exists without boot2.flag.
+            FILE *crashed = std::fopen(background::BOOT_FLAG_CRASHED_PATH, "ab");
+            if (crashed) { std::fclose(crashed); }
+        }
+        background::queue_ultrahand_message("后台自动备份连续异常退出，已停用。可在 JKSV 设置中重新启用");
         return false;
     }
 
@@ -338,39 +152,93 @@ namespace
         return delay;
     }
 
-    uint64_t retry_wait_ns(const background::Settings &settings,
-                           std::time_t lastAttempt,
-                           std::time_t now,
-                           unsigned failedBatches)
+    unsigned read_failed_batches()
     {
-        if (lastAttempt == 0) { return 0; }
-        const uint64_t delay = retry_delay_seconds(settings, failedBatches);
-        const uint64_t elapsed = now >= lastAttempt ? static_cast<uint64_t>(now - lastAttempt) : 0;
-        if (elapsed >= delay) { return 0; }
-        return std::min<uint64_t>((delay - elapsed) * 1'000'000'000ULL,
-                                  MAIN_MAINTENANCE_WAIT_NS);
+        FILE *file = std::fopen(background::RETRY_STATE_PATH, "rb");
+        if (!file) { return 0; }
+        unsigned failedBatches{};
+        if (std::fscanf(file, "%u", &failedBatches) != 1) { failedBatches = 0; }
+        std::fclose(file);
+        return failedBatches;
     }
 
-    void record_queue_attempt(const background::Settings &settings,
-                              std::time_t &lastAttempt,
-                              unsigned &failedBatches,
-                              size_t uploadedCount)
+    void write_number(const char *path, unsigned long long value)
     {
-        lastAttempt = std::time(nullptr);
+        const std::string temporary = std::string(path) + ".tmp";
+        FILE *file                  = std::fopen(temporary.c_str(), "wb");
+        if (!file) { return; }
+        const bool written = std::fprintf(file, "%llu\n", value) > 0 && std::fflush(file) == 0;
+        std::fclose(file);
+        if (!written || !background::atomic_replace(temporary, path)) { background::remove_file(temporary); }
+    }
+
+    // The monitor waits this long after the worker exits before starting it again. It only ever wakes up for this
+    // while there's something left in the queue.
+    void schedule_retry(const background::Settings &settings, size_t uploadedCount, bool newSaves)
+    {
         if (!background::pending_backups_exist())
         {
-            failedBatches = 0;
+            background::remove_file(background::RETRY_AFTER_PATH);
+            background::remove_file(background::RETRY_STATE_PATH);
             return;
         }
 
+        // A new save should get the base interval even if older queued work had
+        // reached the retry backoff cap.
+        unsigned failedBatches = newSaves ? 0 : read_failed_batches();
         if (uploadedCount != 0) { failedBatches = 1; }
         else { failedBatches = std::min(failedBatches + 1, 32U); }
+
+        const uint64_t delay = retry_delay_seconds(settings, failedBatches);
+        write_number(background::RETRY_STATE_PATH, failedBatches);
+        write_number(background::RETRY_AFTER_PATH, delay);
         background::logf("RETRY_SCHEDULED delay=%llus consecutive-failures=%u",
-                         static_cast<unsigned long long>(retry_delay_seconds(settings, failedBatches)),
+                         static_cast<unsigned long long>(delay),
                          failedBatches);
     }
 
+    /// @return False if a game was started during the delay.
+    bool wait_for_close_delay(const background::Settings &settings)
+    {
+        for (int second = 0; second < settings.closeDelaySeconds; ++second)
+        {
+            if (background::application_running()) { return false; }
+            background::sleep_seconds(1);
+        }
+        return !background::application_running();
+    }
+
+    void log_memory_usage()
+    {
+        uint64_t used{};
+        svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
+        background::logf("WORKER_EXIT memory=%lluKiB", static_cast<unsigned long long>(used / 1024));
+    }
 } // namespace
+
+bool background::application_running()
+{
+    uint64_t pid{};
+    return s_pmdmntReady && R_SUCCEEDED(pmdmntGetApplicationProcessId(&pid)) && pid != 0;
+}
+
+bool background::jksv_running()
+{
+    FILE *file = std::fopen(background::JKSV_RUNNING_PATH, "rb");
+    if (!file) { return false; }
+    unsigned long long pid{};
+    long long bootEpoch{};
+    const bool parsed = std::fscanf(file, "%llu %lld", &pid, &bootEpoch) == 2;
+    std::fclose(file);
+
+    // Process IDs only count up within a boot, so a live process with this ID from this boot is still JKSV. A file
+    // left over from a crash or an earlier boot is removed so it can't hold uploads back forever.
+    uint64_t programId{};
+    const bool running = parsed && same_boot(bootEpoch) && s_pmdmntReady &&
+                         R_SUCCEEDED(pmdmntGetProgramId(&programId, pid));
+    if (!running) { background::remove_file(background::JKSV_RUNNING_PATH); }
+    return running;
+}
 
 extern "C"
 {
@@ -390,8 +258,8 @@ extern "C"
 
     void __appInit(void)
     {
-        Result result = smInitialize();
-        if (R_FAILED(result)) { diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_InitFail_SM)); }
+        // A fatal error over a backup that can wait for the next game would be far worse than skipping it.
+        if (R_FAILED(smInitialize())) { svcExitProcess(); }
 
         if (R_SUCCEEDED(setsysInitialize()))
         {
@@ -404,37 +272,14 @@ extern "C"
         }
 
         if (R_SUCCEEDED(timeInitialize())) { __libnx_init_time(); }
-        result = fsInitialize();
-        if (R_FAILED(result)) { diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_InitFail_FS)); }
+        if (R_FAILED(fsInitialize())) { svcExitProcess(); }
         fsdevMountSdmc();
         // Keep SM alive: DNS and TLS request services lazily during the first upload.
     }
 
     void __appExit(void)
     {
-        background::g_shutdownRequested.store(true, std::memory_order_release);
-        if (s_workEventReady)
-        {
-            eventFire(&s_workEvent);
-            eventClose(&s_workEvent);
-            s_workEventReady = false;
-        }
-        if (s_processEventReady)
-        {
-            eventClose(&s_processEvent);
-            s_processEventReady = false;
-        }
-        if (s_processObserverReady)
-        {
-            pglEventObserverClose(&s_processObserver);
-            s_processObserverReady = false;
-        }
-        if (s_pglReady)
-        {
-            pglExit();
-            s_pglReady = false;
-        }
-        if (s_pminfoReady) { pminfoExit(); }
+        if (s_pdmReady) { pdmqryExit(); }
         if (s_pmdmntReady) { pmdmntExit(); }
         if (s_setReady) { setExit(); }
         if (s_accountReady) { accountExit(); }
@@ -450,137 +295,89 @@ int main(int, char **)
 {
     background::ensure_directory(background::QUEUE_DIRECTORY);
     background::ensure_directory(background::STATE_DIRECTORY);
-    background::log(
-        "START version=1.0.4 heap=4096KiB stack=512KiB background-sync startup-grace=30s power-aware-idle");
+    background::log("WORKER_START version=" APP_VERSION " heap=4096KiB stack=512KiB");
 
-    if (!handle_previous_interruption())
-    {
-        background::log("IDLE sysmodule disabled; rename boot2.flag.crashed to boot2.flag after inspection");
-        while (true) { background::sleep_seconds(3600); }
-    }
-    svcSleepThread(STARTUP_GRACE_NS);
-    while (!initialize_title_services())
-    {
-        background::log("SERVICE_RETRY title monitoring services unavailable");
-        background::sleep_seconds(10);
-    }
+    // The monitor managed to start the worker, so whatever kept it from doing that is fixed.
+    background::remove_file(background::MONITOR_LAUNCH_FAILED_PATH);
 
-    const Result eventResult = eventCreate(&s_workEvent, true);
-    s_workEventReady = R_SUCCEEDED(eventResult);
-    if (!s_workEventReady)
+    if (!check_disabled_state() || !handle_previous_interruption()) { return 0; }
+
+    if (!initialize_title_services())
     {
-        background::logf("WORK_EVENT_CREATE_FAILED result=0x%08X; using timed waits", eventResult);
+        // The monitor tries again with the next game that closes.
+        background::log("SERVICE_UNAVAILABLE title services could not be opened");
+        return 0;
     }
 
-    if (initialize_process_events())
+    background::Settings settings{};
+    if (!background::load_settings(settings) || !settings.enabled)
     {
-        background::log("MONITOR_MODE process-events reconcile=15m");
-    }
-    else
-    {
-        background::log("MONITOR_MODE polling active=1s idle=5s");
+        background::remove_file(background::RETRY_AFTER_PATH);
+        return 0;
     }
 
-    uint64_t initialPid{};
-    if (query_application_pid(initialPid))
+    // JKSV might be restoring the very save this would read, and it uploads on its own anyway. Nothing is read from
+    // the play log yet, so whatever closed is still found when this runs again.
+    if (background::jksv_running())
     {
-        // Block queue work until the monitor resolves the title ID.
-        background::g_runningTitleId.store(1, std::memory_order_release);
+        background::log("WORKER_DEFERRED jksv-running");
+        write_number(background::RETRY_AFTER_PATH, JKSV_RUNNING_RETRY_SECONDS);
+        return 0;
     }
 
-    const Result monitorResult = threadCreate(&s_monitorThread,
-                                               game_monitor,
-                                               nullptr,
-                                               s_monitorStack,
-                                               sizeof(s_monitorStack),
-                                               44,
-                                               3);
-    if (R_FAILED(monitorResult) || R_FAILED(threadStart(&s_monitorThread)))
+    // Closing a game and starting another right away shouldn't have to wait on this.
+    if (!wait_for_close_delay(settings))
     {
-        background::logf("MONITOR_START_FAILED result=0x%08X", monitorResult);
-        while (true) { background::sleep_seconds(60); }
+        background::log("WORKER_DEFERRED game-running");
+        return 0;
     }
-    background::log("READY monitoring application exits");
 
-    std::time_t lastQueueAttempt{};
-    unsigned failedQueueBatches{};
-    uint64_t deferredTitle{};
-    while (true)
+    int32_t newestEntry{};
+    std::vector<uint64_t> titles{};
+    const bool playLogRead = background::closed_titles_since_last_run(titles, newestEntry);
+
+    size_t uploadedCount{};
+    size_t failedTitles{};
+    bool titlesDeferred{};
+    begin_guarded_operation();
+    for (const uint64_t title : titles)
     {
-        background::Settings settings{};
-        if (!background::load_settings(settings) || !settings.enabled)
+        // Left in the play log for the next run. The game that just started will close again eventually.
+        if (background::application_running())
         {
-            wait_for_work(MAIN_MAINTENANCE_WAIT_NS);
-            continue;
+            titlesDeferred = true;
+            break;
         }
-
-        if (background::g_runningTitleId.load(std::memory_order_acquire) != 0)
+        if (!background::prepare_title_backups(title, settings))
         {
-            // The monitor signals this event immediately after a confirmed
-            // game exit, so the maintenance timeout does not delay backups.
-            wait_for_work(MAIN_MAINTENANCE_WAIT_NS);
-            continue;
-        }
-
-        if (deferredTitle == 0)
-        {
-            deferredTitle = background::g_pendingTitleId.exchange(0, std::memory_order_acq_rel);
-        }
-
-        if (deferredTitle != 0)
-        {
-            const uint64_t title = deferredTitle;
-            deferredTitle = 0;
-            for (int second = 0; second < settings.closeDelaySeconds; ++second)
+            if (background::application_running())
             {
-                if (background::g_runningTitleId.load(std::memory_order_acquire) != 0)
-                {
-                    deferredTitle = title;
-                    break;
-                }
-                background::sleep_seconds(1);
+                titlesDeferred = true;
+                break;
             }
-            if (deferredTitle != 0) { continue; }
-
-            // A new save should get an immediate upload attempt even if older
-            // queued work had reached the retry backoff cap.
-            failedQueueBatches = 0;
-            size_t uploadedCount{};
-            begin_guarded_operation();
-            if (background::prepare_title_backups(title, settings))
-            {
-                uploadedCount = background::process_pending_backups(settings);
-            }
-            end_guarded_operation();
-            if (uploadedCount != 0) { background::queue_ultrahand_notification(uploadedCount); }
-            record_queue_attempt(settings, lastQueueAttempt, failedQueueBatches, uploadedCount);
-            continue;
+            ++failedTitles;
         }
+    }
 
-        if (!background::pending_backups_exist())
-        {
-            lastQueueAttempt = 0;
-            failedQueueBatches = 0;
-            wait_for_work(MAIN_MAINTENANCE_WAIT_NS);
-            continue;
-        }
+    // The position only moves past games that were dealt with. A game that failed outright would most likely fail
+    // again, so it's reported instead of retried with every game that closes from now on.
+    if (playLogRead && !titlesDeferred) { background::save_play_log_position(newestEntry); }
+    if (failedTitles != 0)
+    {
+        background::logf("BACKUP_SUMMARY failed-titles=%zu", failedTitles);
+        char text[128]{};
+        std::snprintf(text, sizeof(text), "有 %zu 个游戏的存档未能备份，详见 background-sync.log", failedTitles);
+        background::queue_ultrahand_message(text);
+    }
 
-        const std::time_t now = std::time(nullptr);
-        const uint64_t retryWait = retry_wait_ns(settings,
-                                                 lastQueueAttempt,
-                                                 now,
-                                                 failedQueueBatches);
-        if (retryWait != 0)
-        {
-            wait_for_work(retryWait);
-            continue;
-        }
-
-        size_t uploadedCount{};
-        begin_guarded_operation();
+    if (!background::application_running() && !background::jksv_running())
+    {
         uploadedCount = background::process_pending_backups(settings);
-        end_guarded_operation();
-        if (uploadedCount != 0) { background::queue_ultrahand_notification(uploadedCount); }
-        record_queue_attempt(settings, lastQueueAttempt, failedQueueBatches, uploadedCount);
     }
+    end_guarded_operation();
+
+    if (uploadedCount != 0) { background::queue_ultrahand_notification(uploadedCount); }
+    schedule_retry(settings, uploadedCount, !titles.empty());
+    log_memory_usage();
+    return 0;
 }

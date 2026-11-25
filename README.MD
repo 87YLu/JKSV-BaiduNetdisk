@@ -1,63 +1,40 @@
 # JKSV 百度网盘存档同步
 
-> v1.0.4 · 适用于运行 Atmosphère 的 Nintendo Switch
+> v1.1.0 · 适用于运行 Atmosphère 的 Nintendo Switch · 版本变化见 [CHANGELOG.MD](CHANGELOG.MD)
 
-版本变化请参阅 [CHANGELOG.MD](CHANGELOG.MD)。
-
-这是一个加入百度网盘支持的 JKSV 版本。完成一次配置后，它可以在游戏结束时自动备份对应存档并上传到百度网盘，也可以在 JKSV 中查看、上传和恢复云端备份。
+基于 [J-D-K/JKSV](https://github.com/J-D-K/JKSV) 的存档管理工具，只保留本地备份和百度网盘两种存档方式，界面为简体中文。配置一次后，游戏关闭时会自动备份存档并上传到百度网盘，也可以在 JKSV 里手动上传、恢复和管理云端备份。
 
 ## 主要功能
 
-- 使用百度网盘 App 扫描二维码登录，不需要在 Switch 上输入百度账号密码。
-- 自动保存并续期登录状态，通常不需要反复扫码。
-- 游戏关闭后自动备份对应存档并上传百度网盘。
-- 使用 Ultrahand 时，后台上传成功后显示系统级 Toast 提示。
-- 存档没有变化时自动跳过，避免重复上传。
-- 断网或上传失败时保留任务，恢复联网后自动重试。
-- 支持账号存档和可选的设备共享存档。
-- 在 JKSV 中查看当前百度网盘账号，并可随时退出或重新登录。
-- 在 JKSV 中上传本地 ZIP、恢复云端备份、覆盖或删除云端文件。
-- 游戏备份列表按修改时间从新到旧排列，最新一份标记 `[最新]`，支持手动刷新该游戏的云端存档。
-- 自动备份采用 JKSV 兼容格式，可以直接恢复。
+- 百度网盘 App 扫码登录，登录状态自动续期，通常不需要反复扫码。
+- 游戏关闭后自动备份并上传；存档没有变化时跳过。
+- 断网或上传失败时保留任务，之后按退避间隔自动重试。
+- 安装 Ultrahand 时，上传成功后显示 Toast 提示。
+- 在 JKSV 中上传本地 ZIP、恢复云端备份、覆盖或删除云端文件，备份列表按时间倒序并标记 `[最新]`。
+- 自动备份与 JKSV 格式兼容，可以直接恢复。
 
-## 开始前需要准备
+## 准备
 
-- 一台可以运行 Atmosphère 和 Homebrew Menu 的 Nintendo Switch。
-- 可正常读写的 SD 卡。
-- 百度网盘 App，用于扫描授权二维码。
-- 能够访问百度网盘开放平台的百度账号。
-- 在百度网盘开放平台创建应用后取得的 AppKey 和 SecretKey。
-- Switch 可正常连接互联网。
-
-百度网盘开放平台入口：[pan.baidu.com/union](https://pan.baidu.com/union/)
-
-本项目不会提供公共 AppKey 或 SecretKey。请使用自己的应用信息，并且不要把包含密钥或登录令牌的配置文件发送给他人。
+- 可以运行 Atmosphère 和 Homebrew Menu 的 Switch，并能连接互联网。
+- 百度网盘 App，用于扫码授权。
+- 在[百度网盘开放平台](https://pan.baidu.com/union/)创建应用，取得 AppKey 和 SecretKey。本项目不提供公共密钥。
 
 ## 安装
 
-将发布包解压到 SD 卡根目录。安装完成后，主要文件应位于：
+把发布包解压到 SD 卡根目录，确认以下文件存在：
 
     /switch/JKSV/JKSV.nro
     /atmosphere/contents/420000004A4B5344/exefs.nsp
+    /atmosphere/contents/420000004A4B5344/toolbox.json
     /atmosphere/contents/420000004A4B5344/flags/boot2.flag
+    /atmosphere/contents/420000004A4B5345/exefs.nsp
     /config/JKSV/baidu.example.json
 
-复制完成后，请将 Switch 完整关机并重新开机。只返回主界面或让主机休眠不会重新加载后台模块。
+从 v1.0.4 或更早版本升级时，**420000004A4B5345** 是新增的目录，一定要一起复制。复制后请完整关机再开机，休眠或返回主界面不会重新加载后台模块。
 
-## 配置百度网盘
+## 配置
 
-### 1. 创建开放平台应用
-
-1. 登录百度网盘开放平台。
-2. 创建一个拥有网盘文件访问权限的应用。
-3. 建议将应用名称设为 JKSV。
-4. 记录应用的 AppKey 和 SecretKey。
-
-百度开放平台应用通常只能访问自己的应用数据目录。如果应用名称不是 JKSV，请把下面配置中的 basepath 改成该应用对应的目录。
-
-### 2. 创建配置文件
-
-复制下面的示例，在 SD 卡创建 **/config/JKSV/baidu.json**：
+把示例复制为 **/config/JKSV/baidu.json** 并填写：
 
     {
         "app_key": "你的 AppKey",
@@ -66,201 +43,134 @@
         "background_sync": true
     }
 
-保存时请确认：
+百度只允许应用访问自己的目录。建议把开放平台的应用名称设为 JKSV；如果不是，把 basepath 改成 `/apps/<应用名称>`。
 
-- 文件名是 baidu.json，而不是 baidu.json.txt。
-- app_key 和 secret_key 没有多余空格。
-- basepath 以 / 开头，并与开放平台应用目录一致。
-- JSON 中最后一项后面不要添加逗号。
+## 登录
 
-如果已经存在 Google Drive 的 client_secret.json 或 WebDAV 的 webdav.json，JKSV 可能会优先使用其他远端服务。需要使用百度网盘时，建议暂时移走其他远端配置文件。
+1. 保持联网，建议按住 **R** 启动任意游戏进入完整内存模式的 Homebrew Menu，再打开 JKSV。
+2. 屏幕出现二维码后，用百度网盘 App 扫码并确认授权。
+3. 看到“成功登录百度网盘”即完成。
 
-## 首次扫码登录
+账号相关的操作都在 JKSV 设置页：
 
-1. 保持 Switch 联网。
-2. 建议按住 **R** 启动任意游戏进入完整内存模式的 Homebrew Menu。
-3. 启动 JKSV。
-4. 屏幕出现二维码后，打开百度网盘 App 扫描并确认授权。
-5. 等待 JKSV 显示“成功登录百度网盘”。
+| 项目 | 作用 |
+| --- | --- |
+| 百度网盘账号 | 显示当前账号；已退出时按 **[A]** 重新登录；显示“未连接”时按 **[A]** 重试连接 |
+| 重新扫码登录百度网盘 | 显示新二维码，已登录或授权失效时都可使用。新登录授权成功前旧登录保持有效，取消不会有任何影响 |
+| 退出百度网盘 | 清除本机令牌并暂停后台上传，云端备份、AppKey、设置和待传队列都会保留 |
+| 后台自动备份 | 显示后台模块是否正常；因连续异常被停用时按 **[A]** 重新启用，重启后生效 |
 
-需要重新授权时，进入 JKSV 设置，选择“重新扫码登录百度网盘”并按 **[A]**。无论当前显示已登录、已退出还是授权已失效，都可以使用此入口。
+登录信息保存在 baidu.json 中，到期前自动续期。百度的 refresh_token 有效期为 10 年但只能使用一次，JKSV 和后台模块会加锁、按顺序刷新，不会互相作废。只有授权被撤销或刷新失败时才需要重新扫码。
 
-授权成功后，登录信息会写入 **/config/JKSV/baidu.json**。登录状态到期时会自动续期。
+二维码过期后会自动换一张新的，连续 5 张都没扫码才会结束。重新扫码登录成功后，后台会把下一次关闭的游戏当作新存档重新上传，退出期间玩过的其他游戏不会一次性补传。
 
-## 日常自动备份
+## 自动备份
 
-完成安装和登录后，不需要每次手动打开 JKSV。
+在主界面按 **[X]** 彻底关闭游戏后，后台模块会等存档写完，再打包并上传。只按 Home 返回时游戏仍在运行，不会备份。
 
-1. 正常游玩并保存游戏。
-2. 回到 Switch 主界面。
-3. 按 **[X]** 彻底关闭游戏。
-4. 后台模块会等待存档写入完成，然后创建备份并上传。
+后台由两个程序组成：
 
-仅按 **Home** 键返回主界面时，游戏仍在运行，不会开始自动备份。
+| 程序 | 目录 | 运行方式 |
+| --- | --- | --- |
+| 监视程序 | 420000004A4B5344 | 开机常驻，约 60 KiB 内存。线程在系统里休眠，只有进程退出时才被唤醒；仅在 10.0.0 以下的系统上改为每 5 秒检查一次 |
+| 备份程序 | 420000004A4B5345 | 由监视程序按需启动，完成打包、上传和通知后立即退出并释放内存 |
 
-云端备份默认保存在：
+备份程序从系统游玩记录中查找刚关闭的游戏，游玩时间再短也不会漏掉。游戏运行时它不会打包或上传；打包或上传途中启动了游戏，会立即停下，等游戏再次关闭后继续。JKSV 打开期间后台也会暂停，退出 JKSV 后约 5 分钟内继续。
 
-    /apps/JKSV/<游戏名>/AUTO - <用户 [账号标识]> - <时间>.zip
+还没扫码登录时，后台不会打包任何存档。同一份备份连续 8 次上传失败，或超过百度 4 GiB 的单文件上限时，会移到 **/config/JKSV/background/failed/** 并弹出提示，不再反复重试。SD 卡剩余空间不足时跳过打包。
 
-上传成功后会记录本次存档状态。下次退出游戏时，如果存档没有变化，就不会再次上传。
+云端路径为：
 
-如果 nx-ovlloader 已加载支持 API Notifications 的 Ultrahand（建议 2.3.0 或更新版本），后台模块会在每批上传完成后显示一次 Toast。仅安装 nx-ovlloader 不够，还必须在 **/config/ultrahand/config.ini** 的 `[ultrahand]` 段设置 `notifications=true`，并重新加载 Ultrahand 或完整重启 Switch。通知不可用时只会跳过提示，不会影响备份和上传。
+    <basepath>/<游戏名>/AUTO - <用户 [账号标识]> - <时间>.zip
 
-如果网络暂时不可用，待上传文件会留在队列中，并在联网且没有游戏运行时自动重试。
+游戏名取主机语言下的名称，JKSV 手动备份和后台自动备份使用同一个文件夹。旧版本 JKSV 会把中文游戏名换成 16 位的游戏 ID 作为文件夹名；打开该游戏的备份列表时，旧文件夹会自动改名为游戏名，原有备份不受影响。如果两个文件夹都已存在，旧文件夹会保留，可在百度网盘中手动合并。在 JKSV 中修改游戏的本地文件夹名不会影响云端文件夹。
 
-## 手动创建和上传备份
+## 手动备份与恢复
 
-### 创建新的云端备份
+- **新建云端备份**：选择用户和游戏后选“新备份”。设置中开启“自动上传备份到远程”时会直接上传，开启“保留本地备份”时 SD 卡也保留一份。云端文件夹暂时无法访问时，会改为创建本地备份并提示。
+- **全部备份**：在主界面或用户菜单中备份全部游戏时，无法访问云端文件夹的游戏会被跳过，结束后提示跳过的数量。
+- **上传本地备份**：在备份列表中选中本地 ZIP，按 **[ZR]**。只支持 ZIP，需要先开启“导出存档为 ZIP”。
+- **恢复云端备份**：先完全关闭游戏，在备份列表中选中带 **[BD]** 前缀的备份，按 **[Y]** 并确认。恢复会覆盖当前存档，建议开启“恢复时自动备份”。
 
-1. 打开 JKSV。
-2. 选择用户和游戏。
-3. 选择“新备份”。
-4. 如果设置中启用了“自动上传备份到远程”，新备份会直接上传百度网盘。
-5. 如果启用了“保留本地备份”，上传后仍会在 SD 卡保留一份。
-
-### 上传已有本地备份
-
-1. 在游戏的备份列表中选中一个本地 ZIP。
-2. 按 **[ZR]** 上传。
-3. 等待上传完成。
-
-远端上传只支持 ZIP。需要手动上传时，请先在设置中启用“导出存档为 ZIP”。
-
-## 从百度网盘恢复存档
-
-1. 完全关闭需要恢复的游戏。
-2. 打开 JKSV，选择对应用户和游戏。
-3. 在备份列表中找到带 **[BD]** 前缀的云端备份。
-4. 选中备份并按 **[Y]**。
-5. 阅读确认提示后执行恢复。
-
-恢复会覆盖主机上的当前存档。建议先创建一个新的本地备份，并在设置中启用“恢复时自动备份”。
-
-后台功能只负责备份和上传，不会自动把云端存档写回 Switch；恢复操作始终需要在 JKSV 中手动确认。
-
-## 查看账号和退出登录
-
-进入 JKSV 设置页面，可以看到“百度网盘账号”：
-
-- 已登录时显示当前账号名。
-- 暂时无法取得昵称时，会显示已登录状态。
-- 已退出时，在该项目按 **[A]** 可以重新登录。
-- “重新扫码登录百度网盘”是独立入口，按 **[A]** 会清除旧登录并打开新二维码；取消或扫码失败后保持退出状态，可以再次选择该入口重试。联网和应用配置检查失败时不会清除旧登录。
-- 选择“退出百度网盘”会清除本机保存的登录令牌并暂停后台上传。
-
-登录期限由百度授权服务决定。`access_token` 的实际有效期采用接口返回的 `expires_in`，到期后会使用 `refresh_token` 自动续期，并保存新凭据；不需要每隔几天打开 JKSV。百度[官方 OAuth 文档](https://openauth.baidu.com/doc/doc.html)将刷新凭据有效期标为 10 年，这是长期免扫码的依据，不表示单个访问凭据可在本地设置为 10 年有效。授权撤销、刷新凭据失效等情况仍需重新扫码。不要手动延长 `expires_at`，这只会推迟本机刷新，无法延长服务器认可的有效期。
-
-退出登录不会删除：
-
-- 百度网盘中已经上传的备份。
-- AppKey 和 SecretKey。
-- 本机尚未上传成功的队列文件。
-- 其他 JKSV 设置。
+后台模块只负责备份和上传，不会自动把云端存档写回主机。
 
 ## 后台选项
 
-可以在 **/config/JKSV/baidu.json** 中加入以下选项：
-
-    {
-        "background_sync": true,
-        "background_include_device_saves": true,
-        "background_keep_local": false,
-        "background_verify_tls": true,
-        "background_compression": 1,
-        "background_close_delay_seconds": 3,
-        "background_retry_minutes": 5
-    }
+以下选项都写在 baidu.json 中，修改后建议完整重启：
 
 | 选项 | 默认值 | 用途 |
 | --- | ---: | --- |
-| background_sync | true | 开启或暂停游戏退出后的自动备份 |
-| background_include_device_saves | true | 同时备份设备或共享存档 |
-| background_keep_local | false | 上传成功后在 SD 卡保留 ZIP |
-| background_verify_tls | true | 校验 HTTPS 证书，建议保持开启 |
-| background_compression | 1 | ZIP 压缩等级，范围 0–9 |
-| background_close_delay_seconds | 3 | 关闭游戏后等待存档写入的秒数，范围 1–30 |
-| background_retry_minutes | 5 | 上传失败后的基础重试间隔，连续失败时逐步退避；范围 1–180 分钟 |
-
-修改配置后，建议完整重启 Switch。
+| background_sync | true | 开启或暂停自动备份 |
+| background_include_device_saves | true | 同时备份设备共享存档 |
+| background_keep_local | false | 上传成功后在 **/JKSV/Background/** 保留 ZIP |
+| background_verify_tls | true | 校验 HTTPS 证书，同时作用于 JKSV 和后台，建议保持开启 |
+| background_compression | 1 | ZIP 压缩等级，0–9 |
+| background_close_delay_seconds | 3 | 关闭游戏后等待存档写入的秒数，1–30 |
+| background_retry_minutes | 5 | 上传失败后的基础重试间隔，连续失败时逐步加长，1–180 |
 
 ## 文件位置
 
 | 内容 | 路径 |
 | --- | --- |
-| 百度网盘配置 | /config/JKSV/baidu.json |
-| 后台运行日志 | /config/JKSV/background-sync.log |
+| 百度网盘配置与登录信息 | /config/JKSV/baidu.json |
+| 后台日志 | /config/JKSV/background-sync.log |
 | 待上传队列 | /config/JKSV/background/queue/ |
-| 可选的本地自动备份 | /JKSV/Background/<游戏名>/ |
-| JKSV 前台日志 | /JKSV/log.txt |
-| 百度网盘云端目录 | /apps/JKSV/ |
-
-配置中的 background_keep_local 为 false 时，上传成功后会删除队列中的临时 ZIP；这不会删除云端文件。
+| 多次上传失败的备份 | /config/JKSV/background/failed/ |
+| JKSV 日志 | /JKSV/log.txt |
 
 ## 暂停或卸载
 
-- 临时暂停：把 baidu.json 中的 background_sync 改为 false。
-- 停止开机加载：删除或改名 **/atmosphere/contents/420000004A4B5344/flags/boot2.flag**，然后重启。
-- 完全卸载后台模块：删除 **/atmosphere/contents/420000004A4B5344/**。
-- 只使用手动备份：可以保留 **/switch/JKSV/JKSV.nro** 和百度网盘配置。
+- 暂停自动备份：把 background_sync 改为 false。
+- 停止开机加载：删除或改名 **/atmosphere/contents/420000004A4B5344/flags/boot2.flag** 后重启。
+- 卸载后台模块：删除 **420000004A4B5344** 和 **420000004A4B5345** 两个目录。只用手动备份时可以保留 JKSV.nro 和 baidu.json。
 
 ## 常见问题
 
-### 关闭游戏后没有上传
+**关闭游戏后没有上传**：确认游戏是按 [X] 关闭的、安装后完整重启过、两个 exefs.nsp 和 boot2.flag 位置正确、background_sync 为 true，并且设置页显示已登录。再查看后台日志：没有 `WORKER_START` 说明备份程序没被启动；`SAVE_UNCHANGED` 表示存档没有变化。
 
-依次确认：
+**没有出现二维码**：检查 baidu.json 的 AppKey 和 SecretKey 以及网络。设置页显示“已退出”时，在“百度网盘账号”上按 [A]。
 
-1. 游戏是否通过 **[X]** 完全关闭，而不是只按 Home 返回。
-2. Switch 是否在安装后完整重启过。
-3. exefs.nsp 和 boot2.flag 是否位于正确目录。
-4. baidu.json 中 background_sync 是否为 true。
-5. JKSV 设置页是否显示已经登录百度网盘。
-6. 后台日志中是否出现 GAME_CLOSE、UPLOAD_OK 或 UPLOAD_FAILED。
+**提示无法连接百度网盘**：JKSV 启动时没能连上百度，可能是网络未就绪。联网后在设置页的“百度网盘账号”上按 [A] 重试，不需要重新扫码。
 
-### 没有出现二维码
+**上传失败**：检查网络、网盘剩余空间，以及 basepath 是否与应用目录一致，然后查看日志中 `UPLOAD_FAILED` 后面的错误信息。必要时退出后重新扫码。
 
-- 确认 baidu.json 存在并包含正确的 AppKey 和 SecretKey。
-- 确认 Switch 可以联网。
-- 暂时移走 Google Drive 或 WebDAV 配置。
-- 如果设置页显示“已退出”，在“百度网盘账号”项目按 **[A]**。
-- 如果授权码过期，退出登录后重新扫码。
+**上传成功但没有 Toast**：需要由 nx-ovlloader 加载 Ultrahand（不是 Tesla Menu），建议 2.3.0 或更新版本，并在 **/config/ultrahand/config.ini** 的 `[ultrahand]` 段设置 `notifications=true`。开启 `notifications_hotkey` 时，长按 [-] 约 3 秒会切换这个开关。日志中的 `NOTIFY_QUEUED`、`NOTIFY_SKIPPED` 可以帮助判断。
 
-### 上传失败
+**生成了多份备份**：每个账号存档和设备存档分别备份，文件名中的用户和账号标识用于区分。
 
-- 检查网络连接和百度网盘剩余空间。
-- 确认 basepath 与开放平台应用目录一致。
-- 在设置中退出百度网盘后重新扫码登录。
-- 查看 **/config/JKSV/background-sync.log** 中最近一次 UPLOAD_FAILED 后面的错误信息。
+**后台模块被停用**：备份程序在主机开着的情况下连续两次异常退出时，会把 boot2.flag 改名为 boot2.flag.crashed，并弹出提示。关机或断电打断的备份不计入。检查日志并解决问题后，在设置页的“后台自动备份”上按 [A] 重新启用，然后重启。
 
-### 上传成功但没有 Toast
-
-- 确认 nx-ovlloader 当前加载的是 Ultrahand，而不是 Tesla Menu；仅有 nx-ovlloader 无法显示通知。
-- 打开 **/config/ultrahand/config.ini**，确认 `[ultrahand]` 段中存在 `notifications=true`。
-- 如果 `notifications_hotkey=true`，单独长按 **[-]** 约 3 秒会切换通知；请确认没有因此被改回 `notifications=false`。
-- 修改配置后重新加载 Ultrahand，或将 Switch 完整重启。
-- 确认本次日志包含 `UPLOAD_OK`；`SAVE_UNCHANGED` 和 `UPLOAD_FAILED` 不会触发通知。
-- 建议使用 Ultrahand 2.3.0 或更新版本。
-- 查看后台日志中是否出现 `NOTIFY_QUEUED`、`NOTIFY_SKIPPED` 或 `NOTIFY_FAILED`。
-
-### 自动生成了多份备份
-
-每个账号存档和设备存档会分别生成文件。文件名中的用户和账号标识用于区分不同存档。
-
-同一个存档只有发生变化后才会再次上传；如果没有变化，日志会记录 SAVE_UNCHANGED。
-
-### 开机后后台模块被停用
-
-如果连续两次在备份或上传过程中异常中止，模块会把 boot2.flag 改名为 boot2.flag.crashed，以避免反复启动失败。
-
-请先检查后台日志和配置。确认问题解决后，将文件重新命名为 boot2.flag 并完整重启 Switch。
+**提示后台备份程序无法启动**：监视程序连续 3 次没能启动备份程序，通常是 **420000004A4B5345** 目录缺失或文件损坏。重新复制发布包后重启。
 
 ## 使用安全
 
-- 恢复存档前先备份当前进度。
-- 不要在游戏运行时恢复对应存档。
-- 不要公开 baidu.json，其中可能包含应用密钥和长期登录令牌。
-- 不要随意删除 background/queue 中的文件，未上传成功的备份会保存在这里。
-- 重要存档建议同时保留 SD 卡副本和其他离线副本。
+- 恢复前先备份当前进度，不要在游戏运行时恢复。
+- 不要公开 baidu.json，其中有应用密钥和长期登录令牌。
+- 不要随意删除 background/queue 中的文件，未上传成功的备份保存在这里。
+- 重要存档建议另外保留离线副本。
 
-## 项目说明
+## 编译
 
-本项目基于 [J-D-K/JKSV](https://github.com/J-D-K/JKSV) 开发，并为百度网盘登录、管理和游戏退出后的自动存档同步进行了扩展。
+需要 devkitPro（switch-dev 和 switch-portlibs）：
+
+```bash
+make
+```
+
+```bash
+make background
+```
+
+后者生成 sysmodule/JKSVBaiduSync.nsp（备份程序）和 sysmodule/monitor/JKSVBaiduMonitor.nsp（监视程序）。两者都编译完成后，可以打出发布包：
+
+```bash
+make dist
+```
+
+发布包位于 dist/JKSV-BaiduNetdisk-<版本>.zip，解压到 SD 卡根目录即可。版本号来自 Makefile 中的 APP_VERSION，同时显示在 JKSV 界面上并写入后台日志。
+
+后台百度客户端可以在电脑上对着本地模拟服务器测试，需要主机版的 json-c 静态库：
+
+```bash
+python3 tests/test_baidu_upload.py --json-source <json-c 头文件目录> --json-build <含 libjson-c.a 的目录>
+```

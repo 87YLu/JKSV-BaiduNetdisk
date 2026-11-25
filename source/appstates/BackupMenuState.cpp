@@ -46,7 +46,7 @@ BackupMenuState::BackupMenuState(data::User *user, data::TitleInfo *titleInfo, c
 {
     BackupMenuState::initialize_static_members();
     BackupMenuState::ensure_target_directory();
-    BackupMenuState::initialize_remote_storage();
+    m_remoteLoadPending = remote::get_remote_storage() != nullptr;
     BackupMenuState::initialize_task_data();
     BackupMenuState::initialize_info_string();
     BackupMenuState::save_data_check();
@@ -71,6 +71,13 @@ void BackupMenuState::update()
     if (isClosed) { BackupMenuState::deactivate_state(); }
     else if (!isOpen) { return; }
     if (!hasFocus) { return; }
+
+    if (m_remoteLoadPending)
+    {
+        m_remoteLoadPending = false;
+        BackupMenuState::refresh_remote_storage(true);
+        return;
+    }
 
     // Grab the currently selected index.
     int selected{};
@@ -315,30 +322,15 @@ void BackupMenuState::save_data_check()
 bool BackupMenuState::initialize_remote_storage()
 {
     remote::Storage *remote = remote::get_remote_storage();
-    if (!remote) { return false; }
+    if (!remote || !remote::enter_title_directory(remote, m_titleInfo)) { return false; }
 
-    const bool supportsUtf8            = remote->supports_utf8();
-    const std::string_view remoteTitle = supportsUtf8 ? m_titleInfo->get_title() : m_titleInfo->get_path_safe_title();
-    const bool remoteDirExists         = remote->directory_exists(remoteTitle);
-    const bool remoteDirCreated        = !remoteDirExists && remote->create_directory(remoteTitle);
-    if (!remoteDirExists && !remoteDirCreated) { return false; }
-
-    const remote::Item *remoteDir = remote->get_directory_by_name(remoteTitle);
-    if (!remoteDir) { return false; }
-
-    remote->change_directory(remoteDir);
     m_remoteDirectorySelected = true;
-    if (!remote->refresh_directory())
-    {
-        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
-                                           baidu_text(21, "Could not refresh cloud backups. Check connection and sign-in."));
-        return false;
-    }
-    return true;
+    return remote->refresh_directory();
 }
 
-void BackupMenuState::refresh_remote_storage()
+void BackupMenuState::refresh_remote_storage(bool quiet)
 {
+    m_dataStruct->quietRefresh = quiet;
     TaskState::create_push_fade([](sys::threadpool::JobData taskData)
     {
         auto data = std::static_pointer_cast<DataStruct>(taskData);
@@ -348,10 +340,14 @@ void BackupMenuState::refresh_remote_storage()
                                               ? storage->refresh_directory()
                                               : data->spawningState->initialize_remote_storage());
         data->spawningState->refresh();
-        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
-                                           baidu_text(refreshed ? 20 : 21,
-                                                      refreshed ? "Cloud backup list refreshed."
-                                                                : "Could not refresh cloud backups. Check connection and sign-in."));
+        if (!refreshed || !data->quietRefresh)
+        {
+            ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                               baidu_text(refreshed ? 20 : 21,
+                                                          refreshed ? "Cloud backup list refreshed."
+                                                                    : "Could not refresh cloud backups. Check connection and sign-in."));
+        }
+        data->quietRefresh = false;
         data->task->complete();
     }, m_dataStruct);
 }
@@ -371,11 +367,19 @@ void BackupMenuState::name_and_create_backup()
     const bool autoName   = config::get_by_key(config::keys::AUTO_NAME_BACKUPS);
     const bool autoUpload = config::get_by_key(config::keys::AUTO_UPLOAD);
     const bool exportZip  = autoUpload || config::get_by_key(config::keys::EXPORT_TO_ZIP);
+
+    // Losing the backup because the cloud folder couldn't be reached would be worse than it landing on the SD.
     if (remote && autoUpload && !m_remoteDirectorySelected)
     {
         ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
-                                           strings::get_by_name(strings::names::BACKUPMENU_POPS, 10));
-        return;
+                                           baidu_text(26, "Cloud folder unavailable. Creating a local backup instead."));
+        remote = nullptr;
+        if (!fslib::directory_exists(m_directoryPath) && error::fslib(fslib::create_directory(m_directoryPath)))
+        {
+            ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                               strings::get_by_name(strings::names::BACKUPMENU_POPS, 12));
+            return;
+        }
     }
 
     // Input.

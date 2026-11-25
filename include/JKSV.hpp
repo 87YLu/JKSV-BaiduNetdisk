@@ -69,6 +69,9 @@ class JKSV
         /// @brief Pushed the applet mode warning pop-up if needed.
         void applet_mode_warning() noexcept;
 
+        /// @brief Says so at startup if the background worker turned itself off or can't be started.
+        void background_sync_warning() noexcept;
+
         /// @brief Renders the base UI.
         void render_base();
 

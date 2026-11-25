@@ -40,6 +40,10 @@ class SettingsState final : public BaseState
         /// @brief Refreshes the cached Baidu account row after a child state closes.
         bool m_refreshBaiduStatus{true};
 
+        /// @brief What the account row showed last. A connection finishing in the background changes it.
+        bool m_lastBusy{};
+        bool m_lastConnected{};
+
         /// @brief Loads the settings menu strings.
         void load_settings_menu();
 
@@ -57,6 +61,12 @@ class SettingsState final : public BaseState
 
         /// @brief Opens the Baidu sign-out confirmation dialog.
         void confirm_baidu_sign_out();
+
+        /// @brief Updates the background backup row.
+        void update_background_sync_option();
+
+        /// @brief Turns the background worker back on after it disabled itself.
+        void enable_background_sync();
 
         /// @brief Changes the current output directory of JKSV.
         void change_working_directory();

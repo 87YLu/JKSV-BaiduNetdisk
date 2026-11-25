@@ -98,6 +98,9 @@ class BackupMenuState final : public BaseState
 
             /// @brief Signals whether or not the backup fuctions should kill the task when finished. This is so they can be reused.
             bool killTask = false; 
+
+            /// @brief Only says something if refreshing the cloud list fails. Used for the first load.
+            bool quietRefresh = false;
         };
         // clang-format on
 
@@ -132,6 +135,10 @@ class BackupMenuState final : public BaseState
         /// @brief Variable that saves whether or not the filesystem has data in it.
         bool m_saveHasData{};
         bool m_remoteDirectorySelected{};
+
+        /// @brief The cloud list is loaded on the first update instead of the constructor, so opening the menu doesn't
+        /// freeze the UI while Baidu answers.
+        bool m_remoteLoadPending{};
 
         /// @brief Data struct passed to functions.
         std::shared_ptr<BackupMenuState::DataStruct> m_dataStruct{};
@@ -174,7 +181,7 @@ class BackupMenuState final : public BaseState
 
         /// @brief Ensures the remote storage is initalized and pointing to the right place.
         bool initialize_remote_storage();
-        void refresh_remote_storage();
+        void refresh_remote_storage(bool quiet = false);
 
         /// @brief This is the function called when New Backup is selected.
         void name_and_create_backup();

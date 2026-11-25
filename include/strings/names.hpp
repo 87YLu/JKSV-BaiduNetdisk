@@ -19,7 +19,6 @@ namespace strings::names
     inline constexpr std::string_view FILEOPTION_STATUS     = "FileOptionStatus";
     inline constexpr std::string_view FILEOPTION_POPS       = "FileOptionPops";
     inline constexpr std::string_view GENERAL_POPS          = "GeneralPops";
-    inline constexpr std::string_view GOOGLE_DRIVE          = "GoogleDriveStrings";
     inline constexpr std::string_view HOLDING_STRINGS       = "HoldingStrings";
     inline constexpr std::string_view IO_STATUSES           = "IOStatuses";
     inline constexpr std::string_view IO_POPS               = "IOPops";
@@ -45,6 +44,5 @@ namespace strings::names
     inline constexpr std::string_view USEROPTION_CONFS      = "UserOptionConfirmations";
     inline constexpr std::string_view USEROPTION_STATUS     = "UserOptionStatus";
     inline constexpr std::string_view USEROPTION_MENU       = "UserOptions";
-    inline constexpr std::string_view WEBDAV                = "WebDavStrings";
     inline constexpr std::string_view YES_NO_OK             = "YesNoOK";
 }

@@ -1,5 +1,7 @@
 #include "baidu.hpp"
 
+#include "shared/BaiduConfigStore.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -22,9 +24,14 @@ namespace
     constexpr std::string_view ENDPOINT_FILE   = "/rest/2.0/xpan/file";
     constexpr std::string_view ENDPOINT_TOKEN  = "/oauth/2.0/token";
     constexpr std::string_view ENDPOINT_UPLOAD = "/rest/2.0/pcs/superfile2";
+    constexpr std::string_view ENDPOINT_LOCATE = "/rest/2.0/pcs/file";
+
+    // Baidu requires this exact app ID for locateupload, regardless of the app's own.
+    constexpr std::string_view LOCATE_UPLOAD_APP_ID = "250528";
 
     constexpr size_t UPLOAD_SLICE_SIZE = 4 * 1024 * 1024;
-    constexpr size_t MAX_UPLOAD_SLICES = 1280;
+    // Baidu's documented limit: 1024 slices, which at 4 MiB is the 4 GiB cap for regular accounts.
+    constexpr size_t MAX_UPLOAD_SLICES = 1024;
     constexpr size_t RESPONSE_LIMIT    = 512 * 1024;
     constexpr size_t HASH_BUFFER_SIZE  = 64 * 1024;
     constexpr std::string_view MULTIPART_BOUNDARY = "----------------JKSVBackgroundBoundary";
@@ -338,31 +345,11 @@ namespace
         return written;
     }
 
-    bool write_config_atomically(json_object *config, std::string_view suffix)
+    // Only HTTPS is allowed. Every request carries the access token in its query string.
+    void restrict_to_https(CURL *curl)
     {
-        const char *contents = json_object_to_json_string_ext(config, JSON_C_TO_STRING_PRETTY);
-        if (!contents) { return false; }
-
-        const size_t length = std::strlen(contents);
-        const std::string temporary = std::string(background::CONFIG_PATH) + std::string(suffix);
-        FILE *file = std::fopen(temporary.c_str(), "wb");
-        bool written{};
-        if (file)
-        {
-            written = std::fwrite(contents, 1, length, file) == length && std::fflush(file) == 0;
-            std::fclose(file);
-        }
-        if (!written)
-        {
-            background::remove_file(temporary);
-            return false;
-        }
-        if (!background::atomic_replace(temporary, background::CONFIG_PATH))
-        {
-            background::remove_file(temporary);
-            return false;
-        }
-        return true;
+        curl_easy_setopt(curl, CURLOPT_PROTOCOLS, static_cast<long>(CURLPROTO_HTTPS));
+        curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, static_cast<long>(CURLPROTO_HTTPS));
     }
 } // namespace
 
@@ -404,7 +391,7 @@ bool background::BaiduClient::load_config()
         return false;
     }
 
-    json_object *config = json_object_from_file(background::CONFIG_PATH);
+    json_object *config = baidu_config::read(background::CONFIG_PATH);
     if (!config)
     {
         m_lastError = "missing or invalid config/JKSV/baidu.json";
@@ -442,6 +429,7 @@ bool background::BaiduClient::load_config()
     return true;
 }
 
+// The caller has to hold baidu_config::ScopedLock.
 bool background::BaiduClient::save_tokens()
 {
     if (background::file_exists(background::LOGOUT_MARKER_PATH))
@@ -450,7 +438,7 @@ bool background::BaiduClient::save_tokens()
         return false;
     }
 
-    json_object *config = json_object_from_file(background::CONFIG_PATH);
+    json_object *config = baidu_config::read(background::CONFIG_PATH);
     if (!config)
     {
         m_lastError = "unable to reload token configuration";
@@ -471,7 +459,7 @@ bool background::BaiduClient::save_tokens()
     json_object_object_add(config, "expires_at", json_object_new_int64(m_tokenExpires));
     json_object_object_add(config, "signed_out", json_object_new_boolean(false));
 
-    const bool written = write_config_atomically(config, ".tmp");
+    const bool written = baidu_config::write(config, background::CONFIG_PATH);
     json_object_put(config);
 
     if (!written)
@@ -484,7 +472,7 @@ bool background::BaiduClient::save_tokens()
     // replacement so an in-flight refresh cannot resurrect the old login.
     if (background::file_exists(background::LOGOUT_MARKER_PATH))
     {
-        json_object *signedOutConfig = json_object_from_file(background::CONFIG_PATH);
+        json_object *signedOutConfig = baidu_config::read(background::CONFIG_PATH);
         if (signedOutConfig)
         {
             json_object_object_add(signedOutConfig, "access_token", json_object_new_string(""));
@@ -492,7 +480,7 @@ bool background::BaiduClient::save_tokens()
             json_object_object_add(signedOutConfig, "expires_at", json_object_new_int64(0));
             json_object_object_add(signedOutConfig, "account_name", json_object_new_string(""));
             json_object_object_add(signedOutConfig, "signed_out", json_object_new_boolean(true));
-            write_config_atomically(signedOutConfig, ".logout.tmp");
+            baidu_config::write(signedOutConfig, background::CONFIG_PATH);
             json_object_put(signedOutConfig);
         }
         m_lastError = "Baidu Netdisk was signed out while refreshing OAuth tokens";
@@ -509,6 +497,23 @@ bool background::BaiduClient::ensure_token()
 
 bool background::BaiduClient::refresh_token()
 {
+    // JKSV might be refreshing at the same time. Refresh tokens only work once, so only one of them can use it.
+    baidu_config::ScopedLock lock{background::CONFIG_PATH};
+    if (!lock.held())
+    {
+        m_lastError = "unable to lock baidu.json for a token refresh";
+        return false;
+    }
+
+    // JKSV could have refreshed while this was running. The refresh token in memory is used up if it did.
+    const std::string rejectedAccessToken = m_accessToken;
+    if (!load_config()) { return false; }
+    if (!m_accessToken.empty() && m_accessToken != rejectedAccessToken && std::time(nullptr) < m_tokenExpires - 90)
+    {
+        background::logf("TOKEN_RELOADED source=%s", "another-process");
+        return true;
+    }
+
     if (m_refreshToken.empty())
     {
         m_lastError = "OAuth refresh token is missing; open JKSV and scan the login QR code";
@@ -537,7 +542,16 @@ bool background::BaiduClient::refresh_token()
     m_accessToken = accessToken;
     if (!refreshToken.empty()) { m_refreshToken = refreshToken; }
     m_tokenExpires = std::time(nullptr) + expiresIn;
-    return save_tokens();
+
+    // The old refresh token is used up now. These new ones only exist in memory until they're saved.
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        if (attempt) { background::sleep_seconds(1); }
+        if (save_tokens()) { return true; }
+        if (background::file_exists(background::LOGOUT_MARKER_PATH)) { return false; }
+    }
+    background::logf("TOKEN_SAVE_FAILED error=%s", m_lastError.c_str());
+    return false;
 }
 
 std::string background::BaiduClient::escape(std::string_view value)
@@ -600,6 +614,9 @@ bool background::BaiduClient::get(std::string_view baseUrl,
         return false;
     }
 
+    // OAuth requests carry the refresh token and client secret. Those are always checked, whatever the setting says.
+    const bool verifyTls = m_verifyTls || baseUrl == URL_BAIDU_OAUTH;
+
     response = {};
     ResponseWriter writer{.output = &response.body};
     curl_easy_reset(m_curl);
@@ -610,8 +627,9 @@ bool background::BaiduClient::get(std::string_view baseUrl,
     curl_easy_setopt(m_curl, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(m_curl, CURLOPT_TIMEOUT, 90L);
     curl_easy_setopt(m_curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYHOST, m_verifyTls ? 2L : 0L);
-    curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYPEER, m_verifyTls ? 1L : 0L);
+    curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYHOST, verifyTls ? 2L : 0L);
+    curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYPEER, verifyTls ? 1L : 0L);
+    restrict_to_https(m_curl);
     curl_easy_setopt(m_curl, CURLOPT_WRITEFUNCTION, write_response);
     curl_easy_setopt(m_curl, CURLOPT_WRITEDATA, &writer);
 
@@ -656,6 +674,7 @@ bool background::BaiduClient::post_form(std::string_view baseUrl,
     curl_easy_setopt(m_curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYHOST, m_verifyTls ? 2L : 0L);
     curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYPEER, m_verifyTls ? 1L : 0L);
+    restrict_to_https(m_curl);
     curl_easy_setopt(m_curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(m_curl, CURLOPT_POSTFIELDS, body.c_str());
     curl_easy_setopt(m_curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
@@ -719,7 +738,12 @@ bool background::BaiduClient::parse_response(Response &response,
     const bool succeeded = httpSuccess && (error == 0 || (allowAlreadyExists && error == -8));
     if (!succeeded)
     {
-        if (error == -6) { m_tokenExpires = 0; }
+        // Every way Baidu says the access token is no good. 110 and 111 only mean that coming from the PCS servers'
+        // error_code; in xpan's errno, 111 means another task is running.
+        const bool pcsError     = get_object(parser, "error_code") != nullptr;
+        const bool tokenRejected = error == -6 || error == 20016 || error == 20017 || error == 31045 ||
+                                   (pcsError && (error == 110 || error == 111)) || response.httpCode == 401;
+        if (tokenRejected) { m_tokenExpires = 0; }
         set_error(context, &response);
         const std::string oauthError = get_string(parser, "error");
         if (oauthError == "expired_token" || oauthError == "invalid_grant")
@@ -766,6 +790,9 @@ bool background::BaiduClient::ensure_remote_parent(std::string_view remotePath)
 
 bool background::BaiduClient::upload_file(std::string_view localPath, std::string_view remotePath)
 {
+    m_deferred         = false;
+    m_permanentFailure = false;
+
     const std::string normalized = normalize_remote_path(remotePath);
     if (normalized.empty())
     {
@@ -777,14 +804,52 @@ bool background::BaiduClient::upload_file(std::string_view localPath, std::strin
     {
         if (!ensure_token()) { return false; }
         if (ensure_remote_parent(normalized) && upload_file_once(localPath, normalized)) { return true; }
-        if (m_tokenExpires != 0 || m_refreshToken.empty()) { break; }
+        if (m_deferred || m_tokenExpires != 0 || m_refreshToken.empty()) { break; }
     }
     return false;
+}
+
+std::string background::BaiduClient::locate_upload_host(std::string_view remotePath, std::string_view uploadId)
+{
+    // Baidu's documentation says to ask for the upload server instead of hardcoding one. If that fails, the address
+    // that has always worked is still better than giving up on the backup.
+    const Parameters parameters = {{"method", "locateupload"},
+                                   {"appid", std::string(LOCATE_UPLOAD_APP_ID)},
+                                   {"path", std::string(remotePath)},
+                                   {"uploadid", std::string(uploadId)},
+                                   {"upload_version", "2.0"}};
+    Response response{};
+    json_object *parser{};
+    if (get(URL_BAIDU_PCS, ENDPOINT_LOCATE, parameters, response) &&
+        parse_response(response, "locate upload server", &parser))
+    {
+        for (const char *key : {"servers", "bak_servers"})
+        {
+            json_object *servers = get_object(parser, key);
+            const size_t count = servers && json_object_is_type(servers, json_type_array)
+                                     ? json_object_array_length(servers)
+                                     : 0;
+            for (size_t index = 0; index < count; ++index)
+            {
+                const std::string server = get_string(json_object_array_get_idx(servers, index), "server");
+                if (server.starts_with("https://"))
+                {
+                    json_object_put(parser);
+                    return server;
+                }
+            }
+        }
+        json_object_put(parser);
+    }
+
+    background::logf("UPLOAD_HOST_FALLBACK error=%s", m_lastError.c_str());
+    return std::string(URL_BAIDU_PCS);
 }
 
 bool background::BaiduClient::upload_slice(FILE *source,
                                             uint64_t offset,
                                             size_t length,
+                                            std::string_view host,
                                             std::string_view remotePath,
                                             std::string_view uploadId,
                                             size_t partNumber,
@@ -801,7 +866,7 @@ bool background::BaiduClient::upload_slice(FILE *source,
                                    {"path", std::string(remotePath)},
                                    {"uploadid", std::string(uploadId)},
                                    {"partseq", std::to_string(partNumber)}};
-    const std::string url = build_url(URL_BAIDU_PCS, ENDPOINT_UPLOAD, parameters, true);
+    const std::string url = build_url(host, ENDPOINT_UPLOAD, parameters, true);
     if (url.empty())
     {
         m_lastError = "unable to build slice upload URL";
@@ -835,6 +900,7 @@ bool background::BaiduClient::upload_slice(FILE *source,
     curl_easy_setopt(m_curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYHOST, m_verifyTls ? 2L : 0L);
     curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYPEER, m_verifyTls ? 1L : 0L);
+    restrict_to_https(m_curl);
     curl_easy_setopt(m_curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(m_curl, CURLOPT_READFUNCTION, read_multipart);
     curl_easy_setopt(m_curl, CURLOPT_READDATA, &reader);
@@ -880,7 +946,8 @@ bool background::BaiduClient::upload_file_once(std::string_view localPath, std::
     const uint64_t maximumSize = static_cast<uint64_t>(UPLOAD_SLICE_SIZE) * MAX_UPLOAD_SLICES;
     if (fileSize > maximumSize)
     {
-        m_lastError = "backup exceeds the 5 GiB background upload limit";
+        m_lastError        = "backup exceeds Baidu's 4 GiB upload limit";
+        m_permanentFailure = true;
         return false;
     }
 
@@ -1006,8 +1073,18 @@ bool background::BaiduClient::upload_file_once(std::string_view localPath, std::
     }
     json_object_put(precreate);
 
+    const std::string host = locate_upload_host(remotePath, uploadId);
     for (const size_t part : requiredParts)
     {
+        // Large uploads take a while. Someone who starts playing online shouldn't have to share their connection.
+        if (background::application_running())
+        {
+            json_object_put(blockList);
+            m_deferred  = true;
+            m_lastError = "deferred: a game started";
+            return false;
+        }
+
         const uint64_t partOffset = static_cast<uint64_t>(part) * UPLOAD_SLICE_SIZE;
         const size_t length = fileSize == 0
                                   ? 0
@@ -1018,7 +1095,7 @@ bool background::BaiduClient::upload_file_once(std::string_view localPath, std::
         for (int attempt = 0; attempt < 3 && !uploaded; ++attempt)
         {
             uploaded = upload_slice(
-                source.get(), partOffset, length, remotePath, uploadId, part, returnedMd5);
+                source.get(), partOffset, length, host, remotePath, uploadId, part, returnedMd5);
             if (!uploaded && attempt < 2) { background::sleep_seconds(1U << attempt); }
         }
         if (!uploaded || returnedMd5 != blockHashes[part])

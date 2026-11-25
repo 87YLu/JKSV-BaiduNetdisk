@@ -140,7 +140,8 @@ void MainMenuState::initialize_data_struct()
     m_dataStruct->spawningState = this;
 }
 
-void MainMenuState::check_for_update() { sys::threadpool::push_job(tasks::update::check_for_update, m_dataStruct); }
+// The upstream updater would replace this build with J-D-K's, which has no Baidu Netdisk support and no worker.
+void MainMenuState::check_for_update() {}
 
 void MainMenuState::push_target_state()
 {

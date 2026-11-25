@@ -4,6 +4,7 @@
 #include "error.hpp"
 #include "logging/logger.hpp"
 #include "remote/remote.hpp"
+#include "shared/BaiduConfigStore.hpp"
 #include "strings/names.hpp"
 #include "strings/strings.hpp"
 #include "stringutil.hpp"
@@ -27,9 +28,14 @@ namespace
     constexpr std::string_view ENDPOINT_DEVICE     = "/oauth/2.0/device/code";
     constexpr std::string_view ENDPOINT_TOKEN      = "/oauth/2.0/token";
     constexpr std::string_view ENDPOINT_SUPERFILE2 = "/rest/2.0/pcs/superfile2";
+    constexpr std::string_view ENDPOINT_LOCATE     = "/rest/2.0/pcs/file";
+
+    // Baidu requires this exact app ID for locateupload, regardless of the app's own.
+    constexpr std::string_view LOCATE_UPLOAD_APP_ID = "250528";
 
     constexpr size_t SIZE_UPLOAD_SLICE = 4 * 1024 * 1024;
-    constexpr size_t MAX_UPLOAD_SLICES = 10000;
+    // Baidu's documented limit: 1024 slices, which at 4 MiB is the 4 GiB cap for regular accounts.
+    constexpr size_t MAX_UPLOAD_SLICES = 1024;
     constexpr size_t MAX_QR_IMAGE_SIZE = 1024 * 1024;
     constexpr int LIST_PAGE_SIZE       = 1000;
     constexpr int ERROR_FILE_EXISTS    = -8;
@@ -374,12 +380,12 @@ namespace
     }
 } // namespace
 
-remote::BaiduNetdisk::BaiduNetdisk(bool authorizeSignedOut)
+remote::BaiduNetdisk::BaiduNetdisk(bool authorizeSignedOut, bool connect)
     : Storage("[BD]")
 {
     static constexpr std::string_view DEFAULT_BASE_PATH = "/apps/JKSV";
 
-    json::Object config = json::new_object(json_object_from_file, remote::PATH_BAIDU_NETDISK_CONFIG.data());
+    json::Object config = json::new_object(baidu_config::read, remote::PATH_BAIDU_NETDISK_CONFIG.data());
     if (!config)
     {
         logger::log("Error initializing Baidu Netdisk: Unable to read configuration file.");
@@ -401,6 +407,7 @@ remote::BaiduNetdisk::BaiduNetdisk(bool authorizeSignedOut)
     const std::string basePath = getConfigString("basepath");
     m_basePath                 = basePath.empty() ? DEFAULT_BASE_PATH : normalize_remote_path(basePath);
     m_tokenExpires             = static_cast<std::time_t>(get_json_int64(config.get(), "expires_at"));
+    m_verifyTls                = get_json_bool(config.get(), "background_verify_tls", true);
     const bool persistedSignedOut = get_json_bool(config.get(), "signed_out") ||
                                     fslib::file_exists(remote::PATH_BAIDU_NETDISK_LOGOUT);
 
@@ -427,7 +434,7 @@ remote::BaiduNetdisk::BaiduNetdisk(bool authorizeSignedOut)
     m_root   = m_basePath;
     m_parent = m_basePath;
 
-    if (m_signedOut) { return; }
+    if (m_signedOut || !connect) { return; }
 
     bool authenticated = BaiduNetdisk::token_is_valid();
     if (!authenticated && !m_refreshToken.empty())
@@ -452,13 +459,60 @@ remote::BaiduNetdisk::BaiduNetdisk(bool authorizeSignedOut)
             const std::string previousAccountName = m_accountName;
             if (BaiduNetdisk::request_account_info() && m_accountName != previousAccountName)
             {
-                BaiduNetdisk::save_tokens();
+                baidu_config::ScopedLock lock{remote::PATH_BAIDU_NETDISK_CONFIG.data()};
+                if (lock.held() && BaiduNetdisk::reload_tokens()) { BaiduNetdisk::save_tokens(); }
             }
         }
     }
 }
 
+template <typename Operation>
+bool remote::BaiduNetdisk::retry_after_token_refresh(Operation operation)
+{
+    if (operation()) { return true; }
+
+    // response_succeeded() zeroes the expiration when Baidu says the token is no good. Anything else failed for some
+    // other reason, and running it again wouldn't help.
+    if (m_signedOut || m_tokenExpires != 0 || m_refreshToken.empty()) { return false; }
+
+    logger::log("Baidu Netdisk rejected the access token; refreshing and trying again.");
+    return BaiduNetdisk::refresh_token() && operation();
+}
+
 bool remote::BaiduNetdisk::create_directory(std::string_view name)
+{
+    return BaiduNetdisk::retry_after_token_refresh([&] { return BaiduNetdisk::create_directory_once(name); });
+}
+
+bool remote::BaiduNetdisk::upload_file(const fslib::Path &source, std::string_view name, sys::ProgressTask *task)
+{
+    return BaiduNetdisk::retry_after_token_refresh([&] { return BaiduNetdisk::upload_file_once(source, name, task); });
+}
+
+bool remote::BaiduNetdisk::patch_file(remote::Item *file, const fslib::Path &source, sys::ProgressTask *task)
+{
+    return BaiduNetdisk::retry_after_token_refresh([&] { return BaiduNetdisk::patch_file_once(file, source, task); });
+}
+
+bool remote::BaiduNetdisk::download_file(const remote::Item *file,
+                                         const fslib::Path &destination,
+                                         sys::ProgressTask *task)
+{
+    return BaiduNetdisk::retry_after_token_refresh(
+        [&] { return BaiduNetdisk::download_file_once(file, destination, task); });
+}
+
+bool remote::BaiduNetdisk::delete_item(const remote::Item *item)
+{
+    return BaiduNetdisk::retry_after_token_refresh([&] { return BaiduNetdisk::delete_item_once(item); });
+}
+
+bool remote::BaiduNetdisk::rename_item(remote::Item *item, std::string_view newName)
+{
+    return BaiduNetdisk::retry_after_token_refresh([&] { return BaiduNetdisk::rename_item_once(item, newName); });
+}
+
+bool remote::BaiduNetdisk::create_directory_once(std::string_view name)
 {
     const std::string path = join_remote_path(m_parent, name);
     if (path.empty())
@@ -475,9 +529,9 @@ bool remote::BaiduNetdisk::create_directory(std::string_view name)
     return true;
 }
 
-bool remote::BaiduNetdisk::upload_file(const fslib::Path &source,
-                                       std::string_view name,
-                                       sys::ProgressTask *task)
+bool remote::BaiduNetdisk::upload_file_once(const fslib::Path &source,
+                                            std::string_view name,
+                                            sys::ProgressTask *task)
 {
     const std::string remotePath = join_remote_path(m_parent, name);
     if (remotePath.empty())
@@ -494,9 +548,9 @@ bool remote::BaiduNetdisk::upload_file(const fslib::Path &source,
     return true;
 }
 
-bool remote::BaiduNetdisk::patch_file(remote::Item *file,
-                                      const fslib::Path &source,
-                                      sys::ProgressTask *task)
+bool remote::BaiduNetdisk::patch_file_once(remote::Item *file,
+                                           const fslib::Path &source,
+                                           sys::ProgressTask *task)
 {
     if (!file || file->is_directory()) { return false; }
 
@@ -511,9 +565,9 @@ bool remote::BaiduNetdisk::patch_file(remote::Item *file,
     return true;
 }
 
-bool remote::BaiduNetdisk::download_file(const remote::Item *file,
-                                         const fslib::Path &destination,
-                                         sys::ProgressTask *task)
+bool remote::BaiduNetdisk::download_file_once(const remote::Item *file,
+                                              const fslib::Path &destination,
+                                              sys::ProgressTask *task)
 {
     if (!file || file->is_directory() || !BaiduNetdisk::ensure_token()) { return false; }
 
@@ -558,6 +612,7 @@ bool remote::BaiduNetdisk::download_file(const remote::Item *file,
     const std::string url = BaiduNetdisk::build_url(downloadLink, {}, {}, true);
     DownloadTarget downloadTarget{.file = &destinationFile, .task = task};
     curl::prepare_get(m_curl);
+    BaiduNetdisk::secure_request(true);
     curl::set_option(m_curl, CURLOPT_URL, url.c_str());
     curl::set_option(m_curl, CURLOPT_USERAGENT, "pan.baidu.com");
     curl::set_option(m_curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -575,7 +630,7 @@ bool remote::BaiduNetdisk::download_file(const remote::Item *file,
     return expectedSize == 0 || downloadTarget.written == expectedSize;
 }
 
-bool remote::BaiduNetdisk::delete_item(const remote::Item *item)
+bool remote::BaiduNetdisk::delete_item_once(const remote::Item *item)
 {
     if (!item || !BaiduNetdisk::ensure_token()) { return false; }
 
@@ -610,7 +665,7 @@ bool remote::BaiduNetdisk::delete_item(const remote::Item *item)
     return true;
 }
 
-bool remote::BaiduNetdisk::rename_item(remote::Item *item, std::string_view newName)
+bool remote::BaiduNetdisk::rename_item_once(remote::Item *item, std::string_view newName)
 {
     if (!item || newName.empty() || newName.find('/') != newName.npos || !BaiduNetdisk::ensure_token())
     {
@@ -732,26 +787,32 @@ bool remote::BaiduNetdisk::get_sign_in_data(std::string &message,
     return true;
 }
 
-bool remote::BaiduNetdisk::poll_sign_in(std::string_view deviceCode)
+remote::BaiduNetdisk::SignInPoll remote::BaiduNetdisk::poll_sign_in(std::string_view deviceCode)
 {
     const Parameters parameters = {{"grant_type", "device_token"},
                                    {"code", std::string(deviceCode)},
                                    {"client_id", m_appKey},
                                    {"client_secret", m_secretKey}};
 
+    // A dropped request is just another poll that didn't get an answer.
     std::string response{};
-    if (!BaiduNetdisk::perform_get(URL_BAIDU_OAUTH, ENDPOINT_TOKEN, parameters, response, false)) { return false; }
+    if (!BaiduNetdisk::perform_get(URL_BAIDU_OAUTH, ENDPOINT_TOKEN, parameters, response, false))
+    {
+        return SignInPoll::Pending;
+    }
 
     json::Object parser{nullptr, json_object_put};
     int errorNumber{};
     if (!BaiduNetdisk::response_succeeded(response, "device token", parser, false, &errorNumber))
     {
         const std::string oauthError = get_json_string(parser.get(), "error");
-        if (oauthError != "authorization_pending" && oauthError != "slow_down")
-        {
-            logger::log("Baidu Netdisk device authorization failed: %s.", oauthError.c_str());
-        }
-        return false;
+        if (oauthError == "authorization_pending") { return SignInPoll::Pending; }
+        if (oauthError == "slow_down") { return SignInPoll::SlowDown; }
+        if (oauthError == "expired_token") { return SignInPoll::Expired; }
+        if (!parser) { return SignInPoll::Pending; }
+
+        logger::log("Baidu Netdisk device authorization failed: %s.", oauthError.c_str());
+        return SignInPoll::Failed;
     }
 
     const std::string accessToken  = get_json_string(parser.get(), "access_token");
@@ -760,7 +821,7 @@ bool remote::BaiduNetdisk::poll_sign_in(std::string_view deviceCode)
     if (accessToken.empty() || refreshToken.empty() || expiresIn <= 0)
     {
         logger::log("Baidu Netdisk device authorization failed: Malformed token response.");
-        return false;
+        return SignInPoll::Failed;
     }
 
     m_accessToken  = accessToken;
@@ -769,20 +830,28 @@ bool remote::BaiduNetdisk::poll_sign_in(std::string_view deviceCode)
     m_refreshRejected = false;
     m_signedOut = false;
     m_accountName.clear();
-    if (!BaiduNetdisk::save_tokens(true)) { return false; }
-    if (BaiduNetdisk::request_account_info() && !BaiduNetdisk::save_tokens(true)) { return false; }
-
-    const bool logoutMarkerExists = fslib::file_exists(remote::PATH_BAIDU_NETDISK_LOGOUT);
-    if (logoutMarkerExists && !fslib::delete_file(remote::PATH_BAIDU_NETDISK_LOGOUT))
     {
-        logger::log("Error completing Baidu Netdisk sign in: Unable to clear the local sign-out marker.");
-        return false;
+        baidu_config::ScopedLock lock{remote::PATH_BAIDU_NETDISK_CONFIG.data()};
+        if (!lock.held() || !BaiduNetdisk::save_tokens(true)) { return SignInPoll::Failed; }
+
+        // Cleared under the lock, so the worker can't see the new tokens with the marker still saying signed out.
+        const bool logoutMarkerExists = fslib::file_exists(remote::PATH_BAIDU_NETDISK_LOGOUT);
+        if (logoutMarkerExists && !fslib::delete_file(remote::PATH_BAIDU_NETDISK_LOGOUT))
+        {
+            logger::log("Error completing Baidu Netdisk sign in: Unable to clear the local sign-out marker.");
+            return SignInPoll::Failed;
+        }
+    }
+    if (BaiduNetdisk::request_account_info())
+    {
+        baidu_config::ScopedLock lock{remote::PATH_BAIDU_NETDISK_CONFIG.data()};
+        if (lock.held()) { BaiduNetdisk::save_tokens(true); }
     }
 
     m_isInitialized = BaiduNetdisk::initialize_storage();
     // The device code has been consumed and the tokens persisted. A directory
     // error must not keep polling that code until the QR screen expires.
-    return true;
+    return SignInPoll::Authorized;
 }
 
 bool remote::BaiduNetdisk::initialize_storage()
@@ -842,6 +911,20 @@ bool remote::BaiduNetdisk::ensure_token()
 
 bool remote::BaiduNetdisk::refresh_token()
 {
+    // The background worker might be refreshing at the same time. Refresh tokens only work once, so only one of them
+    // can use it.
+    baidu_config::ScopedLock lock{remote::PATH_BAIDU_NETDISK_CONFIG.data()};
+    if (!lock.held())
+    {
+        logger::log("Baidu Netdisk token refresh failed: Unable to lock baidu.json.");
+        return false;
+    }
+
+    // If the worker refreshed while JKSV was open, the refresh token in memory is already used up.
+    const std::string rejectedAccessToken = m_accessToken;
+    if (!BaiduNetdisk::reload_tokens()) { return false; }
+    if (m_accessToken != rejectedAccessToken && BaiduNetdisk::token_is_valid()) { return true; }
+
     if (m_refreshToken.empty()) { return false; }
     m_refreshRejected = false;
 
@@ -877,9 +960,27 @@ bool remote::BaiduNetdisk::refresh_token()
     return BaiduNetdisk::save_tokens();
 }
 
+bool remote::BaiduNetdisk::reload_tokens()
+{
+    json::Object config = json::new_object(baidu_config::read, remote::PATH_BAIDU_NETDISK_CONFIG.data());
+    if (!config) { return false; }
+
+    if (get_json_bool(config.get(), "signed_out") || fslib::file_exists(remote::PATH_BAIDU_NETDISK_LOGOUT))
+    {
+        m_signedOut = true;
+        return false;
+    }
+
+    m_accessToken  = get_json_string(config.get(), "access_token");
+    m_refreshToken = get_json_string(config.get(), "refresh_token");
+    m_tokenExpires = static_cast<std::time_t>(get_json_int64(config.get(), "expires_at"));
+    return true;
+}
+
+// The caller has to hold baidu_config::ScopedLock.
 bool remote::BaiduNetdisk::save_tokens(bool allowLogoutMarker)
 {
-    json::Object config = json::new_object(json_object_from_file, remote::PATH_BAIDU_NETDISK_CONFIG.data());
+    json::Object config = json::new_object(baidu_config::read, remote::PATH_BAIDU_NETDISK_CONFIG.data());
     if (!config) { return false; }
 
     const bool signedOut = get_json_bool(config.get(), "signed_out") ||
@@ -896,24 +997,72 @@ bool remote::BaiduNetdisk::save_tokens(bool allowLogoutMarker)
     json_object_object_add(config.get(), "account_name", json_object_new_string(m_accountName.c_str()));
     json_object_object_add(config.get(), "signed_out", json_object_new_boolean(false));
 
-    const char *jsonString  = json_object_to_json_string_ext(config.get(), JSON_C_TO_STRING_PRETTY);
-    const size_t stringSize = std::char_traits<char>::length(jsonString);
-    if (stringSize > static_cast<size_t>(std::numeric_limits<int64_t>::max())) { return false; }
-    const int64_t jsonSize = static_cast<int64_t>(stringSize);
-    fslib::File configFile{remote::PATH_BAIDU_NETDISK_CONFIG, FsOpenMode_Create | FsOpenMode_Write, jsonSize};
-    if (!configFile || configFile.write(jsonString, static_cast<uint64_t>(jsonSize)) != jsonSize ||
-        !configFile.flush())
+    // Writing in place would leave a truncated file, app key and all, if power was cut halfway through. A refresh
+    // has already used up the old refresh token, so a failed write is worth a couple more tries.
+    for (int attempt = 0; attempt < 3; attempt++)
     {
-        logger::log("Error saving Baidu Netdisk OAuth tokens: %s", fslib::error::get_string());
-        return false;
+        if (attempt) { std::this_thread::sleep_for(std::chrono::milliseconds(500)); }
+        if (baidu_config::write(config.get(), remote::PATH_BAIDU_NETDISK_CONFIG.data())) { return true; }
     }
-    return true;
+    logger::log("Error saving Baidu Netdisk OAuth tokens to baidu.json.");
+    return false;
+}
+
+void remote::BaiduNetdisk::secure_request(bool allowHttpRedirects, bool alwaysVerify)
+{
+    // curl::prepare_* turns certificate checking off. The access token is in every URL, so it has to be back on.
+    // Login requests carry the refresh token and app secret, so those are checked even if the setting is off.
+    const bool verify = m_verifyTls || alwaysVerify;
+    curl::set_option(m_curl, CURLOPT_SSL_VERIFYPEER, verify ? 1L : 0L);
+    curl::set_option(m_curl, CURLOPT_SSL_VERIFYHOST, verify ? 2L : 0L);
+    curl::set_option(m_curl, CURLOPT_PROTOCOLS, static_cast<long>(CURLPROTO_HTTPS));
+
+    // Large transfers can't have a total time limit, but one that's stalled for a minute isn't coming back. Without
+    // this, a dropped connection leaves the progress screen up forever.
+    curl::set_option(m_curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl::set_option(m_curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+    curl::set_option(m_curl, CURLOPT_LOW_SPEED_TIME, 60L);
+
+    // Download links can redirect to a CDN address that isn't HTTPS. The token isn't in those.
+    const long redirectProtocols = allowHttpRedirects ? CURLPROTO_HTTP | CURLPROTO_HTTPS : CURLPROTO_HTTPS;
+    curl::set_option(m_curl, CURLOPT_REDIR_PROTOCOLS, redirectProtocols);
+}
+
+std::string remote::BaiduNetdisk::locate_upload_host(std::string_view remotePath, std::string_view uploadId)
+{
+    // Baidu's documentation says to ask for the upload server instead of hardcoding one. If that fails, the address
+    // that has always worked is still better than failing the upload.
+    const Parameters parameters = {{"method", "locateupload"},
+                                   {"appid", std::string(LOCATE_UPLOAD_APP_ID)},
+                                   {"path", std::string(remotePath)},
+                                   {"uploadid", std::string(uploadId)},
+                                   {"upload_version", "2.0"}};
+    std::string response{};
+    json::Object parser{nullptr, json_object_put};
+    if (BaiduNetdisk::perform_get(URL_BAIDU_PCS, ENDPOINT_LOCATE, parameters, response) &&
+        BaiduNetdisk::response_succeeded(response, "locate upload server", parser))
+    {
+        for (const char *key : {"servers", "bak_servers"})
+        {
+            json_object *servers = get_json_object(parser.get(), key);
+            const size_t count   = servers && json_object_is_type(servers, json_type_array)
+                                       ? json_object_array_length(servers)
+                                       : 0;
+            for (size_t i = 0; i < count; i++)
+            {
+                const std::string server = get_json_string(json_object_array_get_idx(servers, i), "server");
+                if (server.starts_with("https://")) { return server; }
+            }
+        }
+    }
+
+    logger::log("Baidu Netdisk upload server lookup failed; using the default upload server.");
+    return std::string(URL_BAIDU_PCS);
 }
 
 bool remote::BaiduNetdisk::download_qr_image(std::string_view url, std::vector<uint8_t> &image)
 {
-    static constexpr std::array<std::string_view, 2> ALLOWED_PREFIXES = {
-        "https://openapi.baidu.com/", "http://openapi.baidu.com/"};
+    static constexpr std::array<std::string_view, 1> ALLOWED_PREFIXES = {"https://openapi.baidu.com/"};
     const bool trustedUrl = std::ranges::any_of(
         ALLOWED_PREFIXES, [&](std::string_view prefix) { return url.starts_with(prefix); });
     if (!trustedUrl) { return false; }
@@ -924,6 +1073,7 @@ bool remote::BaiduNetdisk::download_qr_image(std::string_view url, std::vector<u
     BoundedDownload download{.data = &image, .maximumSize = MAX_QR_IMAGE_SIZE};
 
     curl::prepare_get(m_curl);
+    BaiduNetdisk::secure_request();
     curl::set_option(m_curl, CURLOPT_URL, urlString.c_str());
     curl::set_option(m_curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl::set_option(m_curl, CURLOPT_MAXREDIRS, 5L);
@@ -1247,6 +1397,8 @@ bool remote::BaiduNetdisk::upload_file_internal(const fslib::Path &source,
         for (size_t i = 0; i < requiredParts.size(); i++) { requiredParts[i] = i; }
     }
 
+    const std::string host = BaiduNetdisk::locate_upload_host(remotePath, uploadId);
+
     if (task) { task->reset(static_cast<double>(fileSize)); }
     int64_t uploadedBytes{};
     for (const size_t part : requiredParts)
@@ -1268,7 +1420,7 @@ bool remote::BaiduNetdisk::upload_file_internal(const fslib::Path &source,
         for (int attempt = 0; attempt < 3 && !uploaded; attempt++)
         {
             uploaded = BaiduNetdisk::upload_slice(
-                slice, remotePath, uploadId, part, uploadedBytes, task, returnedMd5);
+                slice, host, remotePath, uploadId, part, uploadedBytes, task, returnedMd5);
             if (!uploaded && attempt < 2)
             {
                 std::this_thread::sleep_for(std::chrono::seconds(1 << attempt));
@@ -1304,6 +1456,7 @@ bool remote::BaiduNetdisk::upload_file_internal(const fslib::Path &source,
 }
 
 bool remote::BaiduNetdisk::upload_slice(const std::vector<uint8_t> &slice,
+                                        std::string_view host,
                                         std::string_view remotePath,
                                         std::string_view uploadId,
                                         size_t partNumber,
@@ -1316,7 +1469,7 @@ bool remote::BaiduNetdisk::upload_slice(const std::vector<uint8_t> &slice,
                                    {"path", std::string(remotePath)},
                                    {"uploadid", std::string(uploadId)},
                                    {"partseq", std::to_string(partNumber)}};
-    const std::string url = BaiduNetdisk::build_url(URL_BAIDU_PCS, ENDPOINT_SUPERFILE2, parameters, true);
+    const std::string url = BaiduNetdisk::build_url(host, ENDPOINT_SUPERFILE2, parameters, true);
 
     MultipartReader reader{};
     reader.header = "--" + std::string(MULTIPART_BOUNDARY) +
@@ -1333,6 +1486,7 @@ bool remote::BaiduNetdisk::upload_slice(const std::vector<uint8_t> &slice,
 
     std::string response{};
     curl::prepare_post(m_curl);
+    BaiduNetdisk::secure_request();
     curl::set_option(m_curl, CURLOPT_URL, url.c_str());
     curl::set_option(m_curl, CURLOPT_HTTPHEADER, headers.get());
     curl::set_option(m_curl, CURLOPT_READFUNCTION, read_multipart);
@@ -1363,13 +1517,15 @@ bool remote::BaiduNetdisk::perform_get(std::string_view baseUrl,
 
     response.clear();
     curl::prepare_get(m_curl);
+    BaiduNetdisk::secure_request(false, baseUrl == URL_BAIDU_OAUTH);
     curl::set_option(m_curl, CURLOPT_URL, url.c_str());
     if (!userAgent.empty()) { curl::set_option(m_curl, CURLOPT_USERAGENT, userAgent.data()); }
     // Bound login and directory requests without limiting file transfers.
     curl::set_option(m_curl, CURLOPT_TIMEOUT, 30L);
     curl::set_option(m_curl, CURLOPT_WRITEFUNCTION, curl::write_response_string);
     curl::set_option(m_curl, CURLOPT_WRITEDATA, &response);
-    return curl::perform(m_curl);
+    m_connectionFailed = !curl::perform(m_curl);
+    return !m_connectionFailed;
 }
 
 bool remote::BaiduNetdisk::perform_post_form(std::string_view baseUrl,
@@ -1388,13 +1544,16 @@ bool remote::BaiduNetdisk::perform_post_form(std::string_view baseUrl,
 
     response.clear();
     curl::prepare_post(m_curl);
+    BaiduNetdisk::secure_request();
     curl::set_option(m_curl, CURLOPT_URL, url.c_str());
     curl::set_option(m_curl, CURLOPT_HTTPHEADER, headers.get());
     curl::set_option(m_curl, CURLOPT_POSTFIELDS, body.c_str());
     curl::set_option(m_curl, CURLOPT_POSTFIELDSIZE, body.size());
+    curl::set_option(m_curl, CURLOPT_TIMEOUT, 60L);
     curl::set_option(m_curl, CURLOPT_WRITEFUNCTION, curl::write_response_string);
     curl::set_option(m_curl, CURLOPT_WRITEDATA, &response);
-    return curl::perform(m_curl);
+    m_connectionFailed = !curl::perform(m_curl);
+    return !m_connectionFailed;
 }
 
 std::string remote::BaiduNetdisk::build_url(std::string_view baseUrl,
@@ -1463,6 +1622,7 @@ bool remote::BaiduNetdisk::response_succeeded(std::string_view response,
     }
 
     int64_t error{};
+    bool pcsError{};
     std::string message{};
     json_object *errnoObject = get_json_object(parser.get(), "errno");
     if (errnoObject) { error = json_object_get_int64(errnoObject); }
@@ -1470,6 +1630,7 @@ bool remote::BaiduNetdisk::response_succeeded(std::string_view response,
     {
         json_object *errorCode = get_json_object(parser.get(), "error_code");
         if (errorCode) { error = json_object_get_int64(errorCode); }
+        pcsError = errorCode && error != 0;
     }
     if (error == 0)
     {
@@ -1504,6 +1665,11 @@ bool remote::BaiduNetdisk::response_succeeded(std::string_view response,
                     responseCode,
                     message.empty() ? "No error description." : message.c_str());
     }
-    if (error == -6) { m_tokenExpires = 0; }
+    // Every way Baidu says the access token is no good. 110 and 111 only mean that as the PCS servers' error_code; as
+    // xpan's errno, 111 means another task is running. An OAuth error is about the refresh token, not this one.
+    const bool tokenRejected = oauthError.empty() &&
+                               (error == -6 || error == 20016 || error == 20017 || error == 31045 ||
+                                (pcsError && (error == 110 || error == 111)) || responseCode == 401);
+    if (tokenRejected) { m_tokenExpires = 0; }
     return succeeded;
 }

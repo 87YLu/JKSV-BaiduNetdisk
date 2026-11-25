@@ -7,6 +7,7 @@
 #include "keyboard/keyboard.hpp"
 #include "logging/logger.hpp"
 #include "remote/remote.hpp"
+#include "shared/BaiduNaming.hpp"
 #include "strings/strings.hpp"
 #include "stringutil.hpp"
 #include "ui/ui.hpp"
@@ -87,10 +88,12 @@ void tasks::titleoptions::delete_all_remote_backups_for_title(sys::threadpool::J
     if (error::is_null(task)) { return; }
     else if (error::is_null({titleInfo, remote})) { TASK_FINISH_RETURN(task); }
 
-    const char *title                  = titleInfo->get_title();
-    const std::string_view remoteTitle = remote->supports_utf8() ? titleInfo->get_title() : titleInfo->get_path_safe_title();
-    const bool exists                  = remote->directory_exists(remoteTitle);
-    if (!exists) { TASK_FINISH_RETURN(task); }
+    // The folder the worker and the backup menu use, or the one older versions made if that was never moved.
+    const char *title = titleInfo->get_title();
+    remote->return_to_root();
+    std::string remoteTitle = baidu_naming::title_directory(title);
+    if (!remote->directory_exists(remoteTitle)) { remoteTitle = titleInfo->get_path_safe_title(); }
+    if (!remote->directory_exists(remoteTitle)) { TASK_FINISH_RETURN(task); }
 
     remote::Item *workDir = remote->get_directory_by_name(remoteTitle);
     if (!workDir) { TASK_FINISH_RETURN(task); }

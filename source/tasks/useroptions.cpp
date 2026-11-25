@@ -79,6 +79,7 @@ void tasks::useroptions::backup_all_for_user_remote(sys::threadpool::JobData tas
     backupStruct->user     = user;
     backupStruct->killTask = false;
 
+    int skipped{};
     const int titleCount = user->get_total_data_entries();
     for (int i = 0; i < titleCount; i++)
     {
@@ -95,17 +96,10 @@ void tasks::useroptions::backup_all_for_user_remote(sys::threadpool::JobData tas
         if (error::is_null(titleInfo)) { continue; }
 
         backupStruct->titleInfo = titleInfo;
-        const std::string_view remoteTitle =
-            remote->supports_utf8() ? titleInfo->get_title() : titleInfo->get_path_safe_title();
-        const bool dirExists = remote->directory_exists(remoteTitle);
-        const bool created   = !dirExists && remote->create_directory(remoteTitle);
-        if (!dirExists && !created) { continue; }
-
-        remote::Item *target = remote->get_directory_by_name(remoteTitle);
-        remote->change_directory(target);
-        if (!remote->refresh_directory())
+        if (!remote::enter_title_directory(remote, titleInfo) || !remote->refresh_directory())
         {
             remote->return_to_root();
+            ++skipped;
             continue;
         }
 
@@ -115,6 +109,14 @@ void tasks::useroptions::backup_all_for_user_remote(sys::threadpool::JobData tas
         tasks::backup::create_new_backup_remote(backupStruct);
 
         remote->return_to_root();
+    }
+
+    if (skipped != 0)
+    {
+        const char *format = strings::get_by_name(strings::names::BAIDU_NETDISK, 27);
+        const std::string message =
+            stringutil::get_formatted_string(format ? format : "%d game(s) could not be uploaded to Baidu Netdisk.", skipped);
+        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS, message);
     }
     task->complete();
 }

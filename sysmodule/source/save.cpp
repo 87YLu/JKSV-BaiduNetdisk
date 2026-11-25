@@ -1,5 +1,6 @@
 #include "baidu.hpp"
 #include "common.hpp"
+#include "shared/BaiduConfigStore.hpp"
 
 #include <algorithm>
 #include <array>
@@ -73,6 +74,21 @@ namespace
     std::string queue_metadata_path(std::string_view key)
     {
         return std::string(background::QUEUE_DIRECTORY) + "/" + std::string(key) + ".json";
+    }
+
+    // Baidu's limit for regular accounts. A ZIP is never smaller than what's in the save by much, so anything this
+    // big will be rejected anyway.
+    constexpr uint64_t MAX_UPLOAD_BYTES = 4ULL * 1024 * 1024 * 1024;
+
+    // Room kept free on the SD beyond the ZIP itself, so a backup can't be what fills the card.
+    constexpr uint64_t SD_SPARE_BYTES = 64ULL * 1024 * 1024;
+
+    bool sd_has_room_for(uint64_t bytes)
+    {
+        FsFileSystem *sdCard = fsdevGetDeviceFileSystem("sdmc");
+        int64_t freeSpace{};
+        if (!sdCard || R_FAILED(fsFsGetFreeSpace(sdCard, "/", &freeSpace))) { return true; }
+        return static_cast<uint64_t>(std::max<int64_t>(0, freeSpace)) >= bytes + SD_SPARE_BYTES;
     }
 
     bool signatures_equal(const background::SaveSignature &left, const background::SaveSignature &right)
@@ -161,11 +177,13 @@ namespace
 
         for (int attempt = 0; attempt < 10; ++attempt)
         {
-            if (background::g_runningTitleId.load(std::memory_order_acquire) != 0) { return false; }
+            if (background::application_running()) { return false; }
 
+            // Nothing here writes to the save, so it's opened read-only when the firmware allows it.
+            const FsSaveDataSpaceId space = static_cast<FsSaveDataSpaceId>(saveInfo.save_data_space_id);
             FsFileSystem fileSystem{};
-            Result result = fsOpenSaveDataFileSystem(
-                &fileSystem, static_cast<FsSaveDataSpaceId>(saveInfo.save_data_space_id), &attribute);
+            Result result = fsOpenReadOnlySaveDataFileSystem(&fileSystem, space, &attribute);
+            if (R_FAILED(result)) { result = fsOpenSaveDataFileSystem(&fileSystem, space, &attribute); }
             if (R_SUCCEEDED(result))
             {
                 mount.mounted = fsdevMountDevice(background::SAVE_MOUNT, fileSystem) != -1;
@@ -297,6 +315,13 @@ namespace
                                             info.st_size > 0xFFFFFFFFLL) == ZIP_OK;
             while (success)
             {
+                // A game can't open its save while this has it mounted. If one starts, let go right away.
+                if (background::application_running())
+                {
+                    success = false;
+                    break;
+                }
+
                 const size_t read = std::fread(s_copyBuffer.data(), 1, s_copyBuffer.size(), source);
                 if (read > 0 && zipWriteInFileInZip(zip, s_copyBuffer.data(), static_cast<unsigned>(read)) != ZIP_OK)
                 {
@@ -336,7 +361,7 @@ namespace
     std::string configured_base_path()
     {
         std::string basePath = "/apps/JKSV";
-        json_object *config  = json_object_from_file(background::CONFIG_PATH);
+        json_object *config  = baidu_config::read(background::CONFIG_PATH);
         if (config)
         {
             const std::string configured = get_string(config, "basepath");
@@ -358,6 +383,7 @@ namespace
         json_object_object_add(root, "remote_path", json_object_new_string(pending.remotePath.c_str()));
         json_object_object_add(root, "title", json_object_new_string(pending.title.c_str()));
         json_object_object_add(root, "user", json_object_new_string(pending.user.c_str()));
+        json_object_object_add(root, "failures", json_object_new_int(pending.failures));
 
         json_object *signature = json_object_new_object();
         json_object_object_add(
@@ -437,6 +463,7 @@ namespace
         pending.remotePath   = get_string(root, "remote_path");
         pending.title        = get_string(root, "title");
         pending.user         = get_string(root, "user");
+        pending.failures     = static_cast<int>(get_uint64(root, "failures"));
         json_object *signature = get_object(root, "signature");
         pending.signature.commitId   = get_uint64(signature, "commit_id");
         pending.signature.timestamp  = get_uint64(signature, "timestamp");
@@ -483,6 +510,16 @@ namespace
         collect_signature(background::SAVE_ROOT, signature);
         if (signature.fileCount == 0) { return true; }
 
+        if (signature.totalBytes > MAX_UPLOAD_BYTES)
+        {
+            background::logf("SAVE_TOO_LARGE title=%016llX bytes=%llu",
+                             static_cast<unsigned long long>(saveInfo.application_id),
+                             static_cast<unsigned long long>(signature.totalBytes));
+            background::queue_ultrahand_message(background::title_name(saveInfo.application_id) +
+                                                " 的存档超过 4 GiB，无法上传到百度网盘");
+            return true;
+        }
+
         const std::string key = background::queue_key(saveInfo);
         background::SaveSignature stored{};
         if ((read_stored_signature(key, stored) && signatures_equal(stored, signature)) ||
@@ -524,6 +561,12 @@ namespace
         pending.user         = user;
         pending.signature    = signature;
 
+        if (!sd_has_room_for(signature.totalBytes))
+        {
+            background::logf("BACKUP_FAILED title=%s user=%s reason=sd-full", title.c_str(), user.c_str());
+            return false;
+        }
+
         const std::string temporaryZip = pending.zipPath + ".tmp";
         background::logf("BACKUP_START title=%s user=%s files=%u bytes=%llu",
                          title.c_str(),
@@ -533,44 +576,88 @@ namespace
         if (!create_zip(temporaryZip, meta, settings.compressionLevel))
         {
             background::remove_file(temporaryZip);
-            background::logf("BACKUP_FAILED title=%s user=%s", title.c_str(), user.c_str());
+            if (background::application_running())
+            {
+                background::logf("BACKUP_DEFERRED title=%s user=%s game-started", title.c_str(), user.c_str());
+            }
+            else { background::logf("BACKUP_FAILED title=%s user=%s", title.c_str(), user.c_str()); }
             return false;
         }
-        // Never leave old metadata pointing at newly replaced ZIP contents.
-        background::remove_file(pending.metadataPath);
-        if (!background::atomic_replace(temporaryZip, pending.zipPath) || !write_pending_metadata(pending))
+        // An older snapshot that hasn't been uploaded yet stays exactly as it was until the new ZIP is in place.
+        if (!background::atomic_replace(temporaryZip, pending.zipPath))
         {
             background::remove_file(temporaryZip);
-            background::remove_file(pending.zipPath);
-            background::remove_file(pending.metadataPath);
-            background::logf("BACKUP_FAILED title=%s user=%s", title.c_str(), user.c_str());
+            background::logf("BACKUP_FAILED title=%s user=%s reason=replace", title.c_str(), user.c_str());
             return false;
+        }
+
+        // If this fails, the old metadata now describes the new ZIP. It still uploads, under the older name, and the
+        // stored signature won't match next time, so the save is picked up again. Nothing is lost either way.
+        if (!write_pending_metadata(pending))
+        {
+            background::logf("QUEUE_METADATA_WRITE_FAILED title=%s user=%s", title.c_str(), user.c_str());
         }
 
         background::logf("BACKUP_QUEUED title=%s user=%s", title.c_str(), user.c_str());
         return true;
     }
 
+    // Also cleans up what can't be uploaded: metadata without its ZIP or that can't be read, and ZIPs or temporary files
+    // with no metadata. Left alone, those would keep a retry scheduled forever.
     std::vector<background::PendingBackup> list_pending_backups()
     {
         std::vector<background::PendingBackup> pending{};
         DIR *directory = ::opendir(background::QUEUE_DIRECTORY);
         if (!directory) { return pending; }
 
+        std::vector<std::string> names{};
         while (dirent *entry = ::readdir(directory))
         {
             const std::string name = entry->d_name;
-            if (!ends_with(name, ".json")) { continue; }
-            background::PendingBackup item{};
-            if (read_pending_metadata(std::string(background::QUEUE_DIRECTORY) + "/" + name, item))
-            {
-                pending.push_back(std::move(item));
-            }
+            if (name != "." && name != "..") { names.push_back(name); }
         }
         ::closedir(directory);
+
+        const std::string directoryPath = std::string(background::QUEUE_DIRECTORY) + "/";
+        std::vector<std::string> keptZips{};
+        for (const std::string &name : names)
+        {
+            if (!ends_with(name, ".json")) { continue; }
+            background::PendingBackup item{};
+            if (read_pending_metadata(directoryPath + name, item))
+            {
+                keptZips.push_back(item.zipPath);
+                pending.push_back(std::move(item));
+                continue;
+            }
+            background::logf("QUEUE_DROPPED_INVALID file=%s", name.c_str());
+            background::remove_file(directoryPath + name);
+        }
+
+        for (const std::string &name : names)
+        {
+            if (ends_with(name, ".json")) { continue; }
+            const std::string path = directoryPath + name;
+            if (std::find(keptZips.begin(), keptZips.end(), path) != keptZips.end()) { continue; }
+            background::logf("QUEUE_DROPPED_ORPHAN file=%s", name.c_str());
+            background::remove_file(path);
+        }
+
         std::sort(pending.begin(), pending.end(), [](const auto &left, const auto &right)
                   { return left.metadataPath < right.metadataPath; });
         return pending;
+    }
+
+    /// Moves an item that keeps failing out of the queue. The ZIP stays on the SD for the user.
+    void park_failed_backup(const background::PendingBackup &pending)
+    {
+        background::ensure_directory(background::FAILED_DIRECTORY);
+        const std::string target = std::string(background::FAILED_DIRECTORY) + "/" + pending.key + ".zip";
+        background::remove_file(target);
+        if (::rename(pending.zipPath.c_str(), target.c_str()) != 0) { background::remove_file(pending.zipPath); }
+        background::remove_file(pending.metadataPath);
+        background::logf("UPLOAD_PARKED title=%s user=%s path=%s", pending.title.c_str(), pending.user.c_str(), target.c_str());
+        background::queue_ultrahand_message(pending.title + " 的存档多次上传失败，已保留在 SD 卡 background/failed 中");
     }
 
     void keep_local_copy(const background::PendingBackup &pending)
@@ -592,7 +679,7 @@ namespace
 
 bool background::prepare_title_backups(uint64_t titleId, const background::Settings &settings)
 {
-    if (titleId == 0 || background::g_runningTitleId.load(std::memory_order_acquire) != 0) { return false; }
+    if (titleId == 0 || background::application_running()) { return false; }
 
     bool found{};
     bool success = true;
@@ -631,22 +718,7 @@ bool background::prepare_title_backups(uint64_t titleId, const background::Setti
     return success;
 }
 
-bool background::pending_backups_exist()
-{
-    DIR *directory = ::opendir(background::QUEUE_DIRECTORY);
-    if (!directory) { return false; }
-    bool found{};
-    while (dirent *entry = ::readdir(directory))
-    {
-        if (ends_with(entry->d_name, ".json"))
-        {
-            found = true;
-            break;
-        }
-    }
-    ::closedir(directory);
-    return found;
-}
+bool background::pending_backups_exist() { return !list_pending_backups().empty(); }
 
 size_t background::process_pending_backups(const background::Settings &settings)
 {
@@ -661,9 +733,9 @@ size_t background::process_pending_backups(const background::Settings &settings)
     }
 
     size_t uploadedCount{};
-    for (const background::PendingBackup &item : pending)
+    for (background::PendingBackup &item : pending)
     {
-        if (background::g_runningTitleId.load(std::memory_order_acquire) != 0)
+        if (background::application_running())
         {
             background::log("UPLOAD_DEFERRED game-running");
             return uploadedCount;
@@ -672,10 +744,28 @@ size_t background::process_pending_backups(const background::Settings &settings)
         background::logf("UPLOAD_START title=%s user=%s", item.title.c_str(), item.user.c_str());
         if (!client.upload_file(item.zipPath, item.remotePath))
         {
+            // A game started partway through. That's not the upload's fault, so it doesn't count toward giving up.
+            if (client.deferred())
+            {
+                background::log("UPLOAD_DEFERRED game-started");
+                return uploadedCount;
+            }
+
             background::logf("UPLOAD_FAILED title=%s user=%s error=%s",
                              item.title.c_str(),
                              item.user.c_str(),
                              client.last_error().c_str());
+
+            // Retrying forever would re-upload the whole ZIP every time. Some failures can't ever succeed at all.
+            ++item.failures;
+            if (client.permanent_failure() || item.failures >= background::MAX_UPLOAD_FAILURES)
+            {
+                park_failed_backup(item);
+            }
+            else if (!write_pending_metadata(item))
+            {
+                background::logf("QUEUE_METADATA_WRITE_FAILED title=%s user=%s", item.title.c_str(), item.user.c_str());
+            }
             continue;
         }
 

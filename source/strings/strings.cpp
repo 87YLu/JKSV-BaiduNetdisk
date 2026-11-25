@@ -19,24 +19,8 @@ namespace
     // This is the actual map where the strings are.
     std::map<std::pair<std::string, int>, std::string> s_stringMap;
 
-    constexpr std::array<std::string_view, SetLanguage_Total> PATH_ARRAY = {"JA.json.z",
-                                                                            "ENUS.json.z",
-                                                                            "FR.json.z",
-                                                                            "DE.json.z",
-                                                                            "IT.json.z",
-                                                                            "ES.json.z",
-                                                                            "ZHCN.json.z",
-                                                                            "KO.json.z",
-                                                                            "NL.json.z",
-                                                                            "PT.json.z",
-                                                                            "RU.json.z",
-                                                                            "ZHTW.json.z",
-                                                                            "ENGB.json.z",
-                                                                            "FRCA.json.z",
-                                                                            "ES419.json.z",
-                                                                            "ZHCN.json.z",
-                                                                            "ZHTW.json.z",
-                                                                            "PTBR.json.z"};
+    /// @brief Simplified Chinese is the only language.
+    constexpr std::string_view PATH_STRINGS = "romfs:/Text/ZHCN.json.z";
 } // namespace
 
 // Definitions at bottom.
@@ -109,22 +93,7 @@ const char *strings::get_by_name(std::string_view name, int index) noexcept
     return findPair->second.c_str();
 }
 
-static fslib::Path get_file_path()
-{
-    static constexpr std::string_view PATH_BASE = "romfs:/Text";
-
-    fslib::Path returnPath{PATH_BASE};
-    uint64_t languageCode{};
-    SetLanguage language{};
-
-    const bool forceEnglish = config::get_by_key(config::keys::FORCE_ENGLISH);
-    const bool codeError    = error::libnx(setGetLanguageCode(&languageCode));
-    const bool langError    = !codeError && error::libnx(setMakeLanguage(languageCode, &language));
-    if (forceEnglish || codeError || langError) { returnPath /= PATH_ARRAY[SetLanguage_ENUS]; }
-    else { returnPath /= PATH_ARRAY[language]; }
-
-    return returnPath;
-}
+static fslib::Path get_file_path() { return fslib::Path{PATH_STRINGS}; }
 
 static void replace_buttons_in_string(std::string &target)
 {

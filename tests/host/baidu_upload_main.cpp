@@ -1,5 +1,6 @@
 #include "baidu.hpp"
 #include <cstdarg>
+#include <cstdlib>
 #include <unistd.h>
 
 namespace background
@@ -11,6 +12,7 @@ namespace background
         return std::rename(std::string(from).c_str(), std::string(to).c_str()) == 0;
     }
     void sleep_seconds(unsigned) {}
+    bool application_running() { return std::getenv("JKSV_TEST_GAME_RUNNING") != nullptr; }
     void logf(const char *format, ...)
     {
         va_list args;
@@ -26,6 +28,9 @@ int main()
     background::BaiduClient client;
     if (!client.initialize(true)) { return 2; }
     const bool uploaded = client.upload_file("backup.zip", "/apps/JKSV/Test/backup.zip");
-    std::printf("%s\n%s\n", uploaded ? "SUCCESS" : "FAILED", client.last_error().c_str());
+    std::printf("%s\n%s\n%s\n",
+                uploaded ? "SUCCESS" : "FAILED",
+                client.last_error().c_str(),
+                client.deferred() ? "DEFERRED" : "");
     return 0;
 }

@@ -16,8 +16,20 @@ namespace remote
     class BaiduNetdisk final : public remote::Storage
     {
         public:
+            /// @brief What one poll of a device-code sign-in found.
+            enum class SignInPoll
+            {
+                Pending,    ///< Not scanned yet, or the request didn't go through. Keep polling.
+                SlowDown,   ///< Polling too often. Keep polling, but wait longer.
+                Expired,    ///< The QR code expired. A new one is needed.
+                Authorized, ///< Signed in. The tokens are saved.
+                Failed      ///< Denied, or the tokens couldn't be saved. Polling again won't help.
+            };
+
             /// @brief Loads Baidu Open Platform credentials and cached OAuth tokens from SD.
-            explicit BaiduNetdisk(bool authorizeSignedOut = false);
+            /// @param authorizeSignedOut Load even after a sign-out, for signing in again.
+            /// @param connect Whether to check the saved login with Baidu. Not needed when about to scan a new QR code.
+            explicit BaiduNetdisk(bool authorizeSignedOut = false, bool connect = true);
 
             bool create_directory(std::string_view name) override;
             bool refresh_directory() override;
@@ -45,7 +57,10 @@ namespace remote
                                   std::vector<uint8_t> &qrImage);
 
             /// @brief Polls Baidu for completion of device-code authorization.
-            bool poll_sign_in(std::string_view deviceCode);
+            SignInPoll poll_sign_in(std::string_view deviceCode);
+
+            /// @brief Whether the last attempt to connect failed because Baidu couldn't be reached at all.
+            bool connection_failed() const noexcept { return !m_isInitialized && m_connectionFailed; }
 
         private:
             using Parameters = std::vector<std::pair<std::string, std::string>>;
@@ -69,14 +84,30 @@ namespace remote
             std::time_t m_tokenExpires{};
             bool m_refreshRejected{};
             bool m_signedOut{};
+            bool m_verifyTls{true};
+            bool m_connectionFailed{};
             std::unordered_map<std::string, int64_t> m_fsIds{};
+
+            /// @brief Runs an operation again after a token refresh if Baidu rejected the access token partway through.
+            template <typename Operation>
+            bool retry_after_token_refresh(Operation operation);
+
+            bool create_directory_once(std::string_view name);
+            bool upload_file_once(const fslib::Path &source, std::string_view name, sys::ProgressTask *task);
+            bool patch_file_once(remote::Item *file, const fslib::Path &source, sys::ProgressTask *task);
+            bool download_file_once(const remote::Item *file, const fslib::Path &destination, sys::ProgressTask *task);
+            bool delete_item_once(const remote::Item *item);
+            bool rename_item_once(remote::Item *item, std::string_view newName);
 
             bool initialize_storage();
             bool request_account_info();
             bool token_is_valid() const noexcept;
             bool ensure_token();
             bool refresh_token();
+            bool reload_tokens();
             bool save_tokens(bool allowLogoutMarker = false);
+            void secure_request(bool allowHttpRedirects = false, bool alwaysVerify = false);
+            std::string locate_upload_host(std::string_view remotePath, std::string_view uploadId);
             bool download_qr_image(std::string_view url, std::vector<uint8_t> &image);
 
             bool request_listing(int *errorNumber = nullptr, bool logErrors = true);
@@ -93,6 +124,7 @@ namespace remote
                                       sys::ProgressTask *task,
                                       FileInfo &uploadedFile);
             bool upload_slice(const std::vector<uint8_t> &slice,
+                              std::string_view host,
                               std::string_view remotePath,
                               std::string_view uploadId,
                               size_t partNumber,

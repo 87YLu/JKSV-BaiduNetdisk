@@ -19,16 +19,7 @@ JKSV.pfs0
 .DS_Store
 
 # Background sysmodule build artifacts
-sysmodule/JKSVBaiduSync.elf
-sysmodule/JKSVBaiduSync.npdm
-sysmodule/JKSVBaiduSync.nso
-sysmodule/JKSVBaiduSync.nsp
+dist/
 
 # Generated compressed translations
 romfs/Text/
-
-# Local release notes and visual experiments
-UPGRADE_V*.txt
-*-preview*.png
-*-design-comparison.png
-design-qa.md

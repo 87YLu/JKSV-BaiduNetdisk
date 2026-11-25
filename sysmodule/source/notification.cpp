@@ -2,8 +2,12 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <json-c/json.h>
 
 namespace
 {
@@ -18,10 +22,8 @@ namespace
     }
 } // namespace
 
-bool background::queue_ultrahand_notification(size_t uploadedCount)
+bool background::queue_ultrahand_message(std::string_view text)
 {
-    if (uploadedCount == 0) { return true; }
-
     // nx-ovlloader alone does not consume .notify files. Requiring Ultrahand's
     // config prevents stale files from accumulating on Tesla-only setups.
     if (!path_has_type(ULTRAHAND_CONFIG_PATH, S_IFREG))
@@ -55,19 +57,23 @@ bool background::queue_ultrahand_notification(size_t uploadedCount)
         return false;
     }
 
-    char payload[256]{};
-    const int payloadLength = std::snprintf(
-        payload,
-        sizeof(payload),
-        "{\"title\":\"JKSV 百度网盘\",\"text\":\"已成功上传 %zu 个存档\","
-        "\"font_size\":22,\"split_type\":\"char\",\"alignment\":\"left\","
-        "\"duration\":3000,\"show_time\":\"false\",\"priority\":20}\n",
-        uploadedCount);
-    if (payloadLength < 0 || static_cast<size_t>(payloadLength) >= sizeof(payload))
+    // Game names can contain quotes and backslashes, so the JSON is built properly instead of with printf.
+    json_object *root = json_object_new_object();
+    if (!root)
     {
-        background::log("NOTIFY_FAILED backend=ultrahand stage=payload-too-long");
+        background::log("NOTIFY_FAILED backend=ultrahand stage=payload");
         return false;
     }
+    json_object_object_add(root, "title", json_object_new_string("JKSV 百度网盘"));
+    json_object_object_add(root, "text", json_object_new_string_len(text.data(), static_cast<int>(text.size())));
+    json_object_object_add(root, "font_size", json_object_new_int(22));
+    json_object_object_add(root, "split_type", json_object_new_string("char"));
+    json_object_object_add(root, "alignment", json_object_new_string("left"));
+    json_object_object_add(root, "duration", json_object_new_int(3000));
+    json_object_object_add(root, "show_time", json_object_new_string("false"));
+    json_object_object_add(root, "priority", json_object_new_int(20));
+    const std::string payload = std::string(json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN)) + "\n";
+    json_object_put(root);
 
     ::unlink(temporaryPath);
     FILE *file = std::fopen(temporaryPath, "wb");
@@ -77,8 +83,7 @@ bool background::queue_ultrahand_notification(size_t uploadedCount)
         return false;
     }
 
-    const size_t expected = static_cast<size_t>(payloadLength);
-    const bool written = std::fwrite(payload, 1, expected, file) == expected;
+    const bool written = std::fwrite(payload.data(), 1, payload.size(), file) == payload.size();
     const bool flushed = written && std::fflush(file) == 0;
     const bool closed  = std::fclose(file) == 0;
     if (!flushed || !closed)
@@ -99,6 +104,15 @@ bool background::queue_ultrahand_notification(size_t uploadedCount)
         return false;
     }
 
-    background::logf("NOTIFY_QUEUED backend=ultrahand count=%zu", uploadedCount);
+    background::log("NOTIFY_QUEUED backend=ultrahand");
     return true;
+}
+
+bool background::queue_ultrahand_notification(size_t uploadedCount)
+{
+    if (uploadedCount == 0) { return true; }
+
+    char text[64]{};
+    std::snprintf(text, sizeof(text), "已成功上传 %zu 个存档", uploadedCount);
+    return background::queue_ultrahand_message(text);
 }

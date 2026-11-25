@@ -28,6 +28,12 @@ namespace background
             bool upload_file(std::string_view localPath, std::string_view remotePath);
             const std::string &last_error() const noexcept;
 
+            /// @brief The last upload stopped because a game started, not because anything failed.
+            bool deferred() const noexcept { return m_deferred; }
+
+            /// @brief The last upload can never succeed as it is, so retrying it is pointless.
+            bool permanent_failure() const noexcept { return m_permanentFailure; }
+
         private:
             using Parameters = std::vector<std::pair<std::string, std::string>>;
 
@@ -47,6 +53,8 @@ namespace background
             std::time_t m_tokenExpires{};
             CURL *m_curl{};
             bool m_verifyTls{true};
+            bool m_deferred{};
+            bool m_permanentFailure{};
 
             bool load_config();
             bool save_tokens();
@@ -56,9 +64,11 @@ namespace background
             bool create_directory(std::string_view path);
             bool upload_file_once(std::string_view localPath, std::string_view remotePath);
             bool verify_uploaded_file(std::string_view remotePath, uint64_t fileSize);
+            std::string locate_upload_host(std::string_view remotePath, std::string_view uploadId);
             bool upload_slice(FILE *source,
                               uint64_t offset,
                               size_t length,
+                              std::string_view host,
                               std::string_view remotePath,
                               std::string_view uploadId,
                               size_t partNumber,

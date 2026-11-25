@@ -91,6 +91,7 @@ JKSV::JKSV()
     sys::threadpool::initialize(); // This is the thread pool so JKSV isn't constantly creating and destroying threads.
 
     // Push the remote init.
+    remote::mark_jksv_running(true);
     sys::threadpool::push_job(remote::initialize, nullptr);
 
     // Launch the loading init. Finish init is called afterwards.
@@ -102,6 +103,7 @@ JKSV::JKSV()
 
     // Push this warning so people can't complain if JKSV runs out of RAM.
     JKSV::applet_mode_warning();
+    JKSV::background_sync_warning();
 
     // JKSV is now running.
     sm_isRunning = true;
@@ -112,6 +114,7 @@ JKSV::JKSV()
 JKSV::~JKSV()
 {
     sys::threadpool::exit();
+    remote::mark_jksv_running(false);
     config::save();
     curl::exit();
     JKSV::exit_services();
@@ -237,7 +240,27 @@ void JKSV::setup_translation_info_strings()
     const char *author            = strings::get_by_name(strings::names::TRANSLATION, 1);
     m_showTranslationInfo         = std::char_traits<char>::compare(author, "NULL", 4) != 0; // This is whether or not to show.
     m_translationInfo             = stringutil::get_formatted_string(translationFormat, author);
-    m_buildString = stringutil::get_formatted_string("v. %02d.%02d.%04d", builddate::MONTH, builddate::DAY, builddate::YEAR);
+    m_buildString = stringutil::get_formatted_string("v%s (%02d.%02d.%04d)",
+                                                     APP_VERSION,
+                                                     builddate::MONTH,
+                                                     builddate::DAY,
+                                                     builddate::YEAR);
+}
+
+void JKSV::background_sync_warning() noexcept
+{
+    static constexpr int WARNING_TICKS = 5000;
+
+    const char *message{};
+    if (remote::background_sync_disabled())
+    {
+        message = strings::get_by_name(strings::names::BAIDU_NETDISK, 32);
+    }
+    else if (remote::background_launch_failed())
+    {
+        message = strings::get_by_name(strings::names::BAIDU_NETDISK, 33);
+    }
+    if (message) { ui::PopMessageManager::push_message(WARNING_TICKS, message); }
 }
 
 void JKSV::applet_mode_warning() noexcept

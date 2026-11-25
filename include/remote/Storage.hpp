@@ -20,7 +20,7 @@ namespace remote
             using List = std::vector<remote::Item>;
 
             /// @brief This just allocates the curl::Handle. Never mind.
-            Storage(std::string_view prefix, bool supportsUtf8 = false);
+            Storage(std::string_view prefix);
 
             /// @brief Storage is owned polymorphically by the remote service manager.
             virtual ~Storage() = default;
@@ -105,8 +105,6 @@ namespace remote
             /// @param newName New name of the target item.
             virtual bool rename_item(remote::Item *item, std::string_view newName) = 0;
 
-            /// @brief Returns whether or not the remote storage type supports UTF-8 for names or requires path safe titles.
-            bool supports_utf8() const noexcept;
 
             /// @brief Returns the prefix for menus.
             std::string_view get_prefix() const noexcept;
@@ -121,8 +119,6 @@ namespace remote
             /// @brief Curl handle.
             curl::Handle m_curl;
 
-            /// @brief This allows JKSV to know whether or not the storage type supports UTF-8.
-            bool m_utf8Paths{};
 
             /// @brief This is the prefix used for menus.
             std::string m_prefix{};

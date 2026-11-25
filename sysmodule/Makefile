@@ -41,7 +41,7 @@ TARGET		:=	JKSVBaiduSync
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
-INCLUDES	:=	include
+INCLUDES	:=	include ../include
 #ROMFS	:=	romfs
 
 #---------------------------------------------------------------------------------
@@ -52,7 +52,8 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__ `curl-config --cflags`
+APP_VERSION	?=	dev
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DAPP_VERSION=\"$(APP_VERSION)\" `curl-config --cflags`
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=c++23 -Wframe-larger-than=8192
 

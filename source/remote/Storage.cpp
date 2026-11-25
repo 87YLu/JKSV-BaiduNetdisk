@@ -7,9 +7,8 @@
 
 //                      ---- Construction ----
 
-remote::Storage::Storage(std::string_view prefix, bool supportsUtf8)
+remote::Storage::Storage(std::string_view prefix)
     : m_curl(curl::new_handle())
-    , m_utf8Paths(supportsUtf8)
     , m_prefix(prefix) {};
 
 //                      ---- Public functions ----
@@ -80,8 +79,6 @@ remote::Item *remote::Storage::get_item_by_id(std::string_view id) noexcept
 
     return &(*findMatch);
 }
-
-bool remote::Storage::supports_utf8() const noexcept { return m_utf8Paths; }
 
 std::string_view remote::Storage::get_prefix() const noexcept { return m_prefix; }
 

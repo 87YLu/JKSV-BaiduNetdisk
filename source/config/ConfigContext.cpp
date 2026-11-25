@@ -60,7 +60,6 @@ void config::ConfigContext::initialize()
     m_configMap[config::keys::ZIP_COMPRESSION_LEVEL]   = 6;
     m_configMap[config::keys::TITLE_SORT_TYPE]         = 0;
     m_configMap[config::keys::JKSM_TEXT_MODE]          = 0;
-    m_configMap[config::keys::FORCE_ENGLISH]           = 0;
     m_configMap[config::keys::SHOW_DEVICE_USER]        = 1;
     m_configMap[config::keys::SHOW_BCAT_USER]          = 0;
     m_configMap[config::keys::SHOW_CACHE_USER]         = 0;

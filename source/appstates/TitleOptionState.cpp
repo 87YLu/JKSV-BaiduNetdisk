@@ -188,14 +188,7 @@ void TitleOptionState::change_output_directory()
     const bool renameFailed = oldExists && error::fslib(fslib::rename_directory(oldPath, newPath));
     if (oldExists && renameFailed) { ui::PopMessageManager::push_message(popTicks, popFailed); }
 
-    // Need to change WebDav to match.
-    remote::Storage *remote = remote::get_remote_storage();
-    const bool dirExists = remote && !remote->supports_utf8() && remote->directory_exists(pathSafe); // This is guaranteed DAV
-    if (dirExists)
-    {
-        remote::Item *item = remote->get_directory_by_name(pathSafe);
-        remote->rename_item(item, pathBuffer.data());
-    }
+    // The cloud folder isn't renamed: it's named after the game, the same way the background worker names it.
 
     const uint64_t applicationID = m_titleInfo->get_application_id();
     m_titleInfo->set_path_safe_title(pathBuffer.data());

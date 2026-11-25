@@ -30,7 +30,7 @@ namespace
     constexpr std::string_view CONFIG_KEY_NULL = "NULL";
 
     /// @brief This makes it easier to work with key indexes. Anything NULL is something that is not easily toggled.
-    constexpr std::array<std::string_view, 26> CONFIG_KEY_ARRAY = {CONFIG_KEY_NULL,
+    constexpr std::array<std::string_view, 25> CONFIG_KEY_ARRAY = {CONFIG_KEY_NULL,
                                                                    CONFIG_KEY_NULL,
                                                                    config::keys::INCLUDE_DEVICE_SAVES,
                                                                    config::keys::AUTO_BACKUP_ON_RESTORE,
@@ -49,7 +49,6 @@ namespace
                                                                    config::keys::ZIP_COMPRESSION_LEVEL,
                                                                    config::keys::TITLE_SORT_TYPE,
                                                                    config::keys::JKSM_TEXT_MODE,
-                                                                   config::keys::FORCE_ENGLISH,
                                                                    config::keys::SHOW_DEVICE_USER,
                                                                    config::keys::SHOW_BCAT_USER,
                                                                    config::keys::SHOW_CACHE_USER,
@@ -65,11 +64,12 @@ namespace
         CycleZip      = 16,
         CycleSortType = 17,
         ToggleJKSM    = 18,
-        ToggleTrash   = 24,
-        CycleScaling  = 25,
-        BaiduAccount  = 26,
-        BaiduSignOut  = 27,
-        BaiduSignIn   = 28
+        ToggleTrash   = 23,
+        CycleScaling  = 24,
+        BaiduAccount  = 25,
+        BaiduSignOut  = 26,
+        BaiduSignIn   = 27,
+        BackgroundSync = 28
     };
 
     enum BaiduStringIndexes
@@ -88,7 +88,14 @@ namespace
         BaiduSignInStartFailed   = 14,
         BaiduNoSignedInAccount   = 15,
         BaiduSignInOption        = 16,
-        BaiduSignInDescription   = 17
+        BaiduSignInDescription   = 17,
+        BaiduBusy                = 24,
+        BaiduNotConnectedFormat  = 25,
+        BackgroundSyncFormat     = 28,
+        BackgroundSyncNormal     = 29,
+        BackgroundSyncDisabled   = 30,
+        BackgroundSyncEnabled    = 31,
+        BackgroundSyncDescription = 34
     };
 
     const char *get_baidu_string(int index, const char *fallback)
@@ -135,7 +142,12 @@ void SettingsState::update()
     const bool xPressed     = input::button_pressed(HidNpadButton_X);
     const bool minusPressed = input::button_pressed(HidNpadButton_Minus);
 
-    if (m_refreshBaiduStatus) { SettingsState::update_baidu_account_option(); }
+    const bool busy      = remote::is_busy();
+    const bool connected = remote::get_remote_storage() != nullptr;
+    if (m_refreshBaiduStatus || busy != m_lastBusy || connected != m_lastConnected)
+    {
+        SettingsState::update_baidu_account_option();
+    }
 
     m_settingsMenu->update(hasFocus);
     if (aPressed) { SettingsState::toggle_options(); }
@@ -178,6 +190,8 @@ void SettingsState::load_settings_menu()
         get_baidu_string(BaiduSignOutOption, "Sign out of Baidu Netdisk"));
     m_settingsMenu->add_option(
         get_baidu_string(BaiduSignInOption, "Sign in again to Baidu Netdisk (QR code)"));
+    m_settingsMenu->add_option(
+        get_baidu_string(BackgroundSyncFormat, "Background backups: %s"));
 }
 
 void SettingsState::load_extra_strings()
@@ -190,8 +204,8 @@ void SettingsState::load_extra_strings()
 void SettingsState::update_menu_options()
 {
     // These are the indexes that are a really simple toggle.
-    static constexpr std::array<int, 21> TOGGLE_INDEXES = {2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
-                                                           13, 14, 15, 18, 19, 20, 21, 22, 23, 24};
+    static constexpr std::array<int, 20> TOGGLE_INDEXES = {2,  3,  4,  5,  6,  7,  8,  9,  10, 11,
+                                                           12, 13, 14, 15, 18, 19, 20, 21, 22, 23};
 
     for (const int index : TOGGLE_INDEXES)
     {
@@ -225,11 +239,14 @@ void SettingsState::update_menu_options()
     }
 
     SettingsState::update_baidu_account_option();
+    SettingsState::update_background_sync_option();
 }
 
 void SettingsState::update_baidu_account_option()
 {
     const remote::BaiduAccountStatus account = remote::get_baidu_account_status();
+    m_lastBusy      = remote::is_busy();
+    m_lastConnected = remote::get_remote_storage() != nullptr;
     std::string status{};
     if (!account.configured)
     {
@@ -249,16 +266,53 @@ void SettingsState::update_baidu_account_option()
         std::replace_if(status.begin(), status.end(), [](unsigned char character) { return character < 0x20; }, ' ');
     }
 
+    // Signed in, but the startup connection didn't go through. Say so, or it looks like everything is fine while
+    // nothing gets uploaded.
+    if (account.signedIn && !m_lastConnected && !m_lastBusy)
+    {
+        const char *notConnected = get_baidu_string(BaiduNotConnectedFormat, "%s (not connected - press [A] to retry)");
+        status = stringutil::get_formatted_string(notConnected, status.c_str());
+    }
+
     const char *format = get_baidu_string(BaiduAccountFormat, "Baidu Netdisk account: %s");
     const std::string option = stringutil::get_formatted_string(format, status.c_str());
     m_settingsMenu->edit_option(CaseIndexes::BaiduAccount, option);
     m_refreshBaiduStatus = false;
 }
 
+void SettingsState::update_background_sync_option()
+{
+    const bool disabled      = remote::background_sync_disabled();
+    const char *state        = disabled ? get_baidu_string(BackgroundSyncDisabled, "Disabled after repeated crashes - press [A] to enable")
+                                        : get_baidu_string(BackgroundSyncNormal, "Normal");
+    const char *format       = get_baidu_string(BackgroundSyncFormat, "Background backups: %s");
+    const std::string option = stringutil::get_formatted_string(format, state);
+    m_settingsMenu->edit_option(CaseIndexes::BackgroundSync, option);
+}
+
+void SettingsState::enable_background_sync()
+{
+    if (!remote::background_sync_disabled()) { return; }
+
+    const bool enabled = remote::enable_background_sync();
+    ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                        enabled ? get_baidu_string(BackgroundSyncEnabled, "Background backups enabled. Restart the console for it to take effect.")
+                                                : strings::get_by_name(strings::names::SETTINGS_POPS, 2));
+}
+
 void SettingsState::handle_baidu_account_option(bool forceReauthorize)
 {
     const remote::BaiduAccountStatus account = remote::get_baidu_account_status();
-    if (account.signedIn && !forceReauthorize) { return; }
+    if (account.signedIn && !forceReauthorize)
+    {
+        if (remote::is_busy())
+        {
+            ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                                get_baidu_string(BaiduBusy, "Connecting to Baidu Netdisk. Please try again in a moment."));
+        }
+        else if (!remote::get_remote_storage()) { remote::retry_baidu_netdisk_connection(); }
+        return;
+    }
 
     const int popTicks = ui::PopMessageManager::DEFAULT_TICKS;
     if (!account.configured)
@@ -282,6 +336,12 @@ void SettingsState::confirm_baidu_sign_out()
         ui::PopMessageManager::push_message(
             ui::PopMessageManager::DEFAULT_TICKS,
             get_baidu_string(BaiduNoSignedInAccount, "No Baidu Netdisk account is currently signed in."));
+        return;
+    }
+    if (remote::is_busy())
+    {
+        ui::PopMessageManager::push_message(ui::PopMessageManager::DEFAULT_TICKS,
+                                            get_baidu_string(BaiduBusy, "Connecting to Baidu Netdisk. Please try again in a moment."));
         return;
     }
 
@@ -366,6 +426,7 @@ void SettingsState::toggle_options()
         case CaseIndexes::BaiduAccount:  SettingsState::handle_baidu_account_option(); break;
         case CaseIndexes::BaiduSignOut:  SettingsState::confirm_baidu_sign_out(); break;
         case CaseIndexes::BaiduSignIn:   SettingsState::handle_baidu_account_option(true); break;
+        case CaseIndexes::BackgroundSync: SettingsState::enable_background_sync(); break;
         default:                         config::toggle_by_key(CONFIG_KEY_ARRAY[selected]); break;
     }
 
@@ -398,7 +459,13 @@ void SettingsState::create_push_description_message()
     {
         description = get_baidu_string(
             BaiduSignInDescription,
-            "Clears the previous login and opens a new login QR code, even if already signed in. Canceling leaves you signed out. Backups and app settings are preserved.");
+            "Opens a new login QR code, even if already signed in. The current login is kept until the new one is authorized, so canceling changes nothing.");
+    }
+    else if (selected == CaseIndexes::BackgroundSync)
+    {
+        description = get_baidu_string(
+            BackgroundSyncDescription,
+            "Background backups turn themselves off if they crash twice in a row. Press [A] here to turn them back on after a restart.");
     }
     else { description = strings::get_by_name(strings::names::SETTINGS_DESCRIPTIONS, selected); }
 

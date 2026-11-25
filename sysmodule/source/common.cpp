@@ -1,5 +1,8 @@
 #include "common.hpp"
 
+#include "shared/BaiduConfigStore.hpp"
+#include "shared/BaiduNaming.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdarg>
@@ -36,15 +39,11 @@ namespace
         return value ? json_object_get_int(value) : fallback;
     }
 
-    bool is_continuation(unsigned char value) { return (value & 0xC0) == 0x80; }
-
-    size_t utf8_sequence_length(unsigned char lead)
+    bool has_string(json_object *parent, const char *key)
     {
-        if (lead < 0x80) { return 1; }
-        if ((lead & 0xE0) == 0xC0) { return 2; }
-        if ((lead & 0xF0) == 0xE0) { return 3; }
-        if ((lead & 0xF8) == 0xF0) { return 4; }
-        return 0;
+        json_object *value = get_object(parent, key);
+        const char *text   = value ? json_object_get_string(value) : nullptr;
+        return text && text[0] != '\0';
     }
 } // namespace
 
@@ -137,50 +136,16 @@ void background::sleep_seconds(unsigned seconds)
     svcSleepThread(static_cast<int64_t>(seconds) * 1000000000LL);
 }
 
+// JKSV uses the same function for its cloud folders, so the two always agree on where a game's backups are.
 std::string background::sanitize_component(std::string_view value, size_t maximumBytes)
 {
-    std::string output{};
-    output.reserve(std::min(value.size(), maximumBytes));
+    return baidu_naming::sanitize_component(value, maximumBytes);
+}
 
-    for (size_t index = 0; index < value.size();)
-    {
-        const unsigned char lead = static_cast<unsigned char>(value[index]);
-        if (lead < 0x80)
-        {
-            char character = static_cast<char>(lead);
-            if (lead < 0x20 || character == '/' || character == '\\' || character == ':' || character == '*' ||
-                character == '?' || character == '"' || character == '<' || character == '>' || character == '|')
-            {
-                character = '_';
-            }
-            if (output.size() + 1 > maximumBytes) { break; }
-            output.push_back(character);
-            ++index;
-            continue;
-        }
-
-        const size_t sequenceLength = utf8_sequence_length(lead);
-        bool valid = sequenceLength > 1 && index + sequenceLength <= value.size();
-        for (size_t byte = 1; valid && byte < sequenceLength; ++byte)
-        {
-            valid = is_continuation(static_cast<unsigned char>(value[index + byte]));
-        }
-        if (!valid)
-        {
-            if (output.size() + 1 <= maximumBytes) { output.push_back('_'); }
-            ++index;
-            continue;
-        }
-        if (output.size() + sequenceLength > maximumBytes) { break; }
-        output.append(value.substr(index, sequenceLength));
-        index += sequenceLength;
-    }
-
-    const size_t first = output.find_first_not_of(" .");
-    if (first == std::string::npos) { return "Unknown"; }
-    output.erase(0, first);
-    while (!output.empty() && (output.back() == ' ' || output.back() == '.')) { output.pop_back(); }
-    return output.empty() ? "Unknown" : output;
+int64_t background::boot_epoch()
+{
+    const int64_t uptime = static_cast<int64_t>(armTicksToNs(armGetSystemTick()) / 1000000000ULL);
+    return static_cast<int64_t>(std::time(nullptr)) - uptime;
 }
 
 std::string background::title_name(uint64_t titleId)
@@ -250,12 +215,14 @@ std::string background::queue_key(const FsSaveDataInfo &saveInfo)
 
 bool background::load_settings(background::Settings &settings)
 {
-    json_object *config = json_object_from_file(background::CONFIG_PATH);
+    json_object *config = baidu_config::read(background::CONFIG_PATH);
     if (!config) { return false; }
 
     const bool signedOut        = get_bool(config, "signed_out", false) ||
                                   background::file_exists(background::LOGOUT_MARKER_PATH);
-    settings.enabled            = get_bool(config, "background_sync", true) && !signedOut;
+    // Before the first QR login there's nowhere to upload to. Zipping and retrying would only fill the queue.
+    const bool hasLogin         = has_string(config, "refresh_token");
+    settings.enabled            = get_bool(config, "background_sync", true) && !signedOut && hasLogin;
     settings.includeDeviceSaves = get_bool(config, "background_include_device_saves", true);
     settings.keepLocal          = get_bool(config, "background_keep_local", false);
     settings.verifyTls          = get_bool(config, "background_verify_tls", true);

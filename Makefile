@@ -40,7 +40,7 @@ INCLUDES	:=	include ./Libraries/FsLib/Switch/FsLib/include ./Libraries/SDLLib/SD
 EXEFS_SRC	:=	exefs_src
 APP_TITLE   :=  JKSV Baidu Sync
 APP_AUTHOR  :=  JK / Baidu integration
-APP_VERSION :=  1.0.4
+APP_VERSION :=  1.1.0
 ROMFS	    :=	romfs
 ICON		:=	icon.jpg
 
@@ -53,7 +53,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 # my local pkg-config and I don't feel like dealing with CMake for all of this right now.
 CFLAGS	:=	$(INCLUDE) -D__SWITCH__ `sdl2-config --cflags` `curl-config --cflags`\
 			-g -Wall -O3 -Os -ffunction-sections -ffast-math -fmax-errors=1 \
-			-I$(PORTLIBS)/include/freetype2 $(ARCH) $(DEFINES)
+			-I$(PORTLIBS)/include/freetype2 $(ARCH) $(DEFINES) -DAPP_VERSION=\"$(APP_VERSION)\"
 
 CXXFLAGS:= $(CFLAGS) -fno-rtti -fno-exceptions -std=c++23
 
@@ -62,7 +62,7 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 
 LIBS	:=	../Libraries/FsLib/Switch/FsLib/lib/libFsLib.a ../Libraries/SDLLib/SDL/lib/libSDL.a \
 			`sdl2-config --libs` -lfreetype -lharfbuzz `curl-config --libs` -lSDL2_image  \
-			-lwebp -lpng -ljpeg -lz -lminizip -ljson-c -ltinyxml2 -lnx -lbz2 -lz
+			-lwebp -lpng -ljpeg -lz -lminizip -ljson-c -lnx -lbz2 -lz
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -147,7 +147,7 @@ ifneq ($(ROMFS),)
 	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: $(BUILD) FsLib SDLLib Assets background clean all
+.PHONY: $(BUILD) FsLib SDLLib Assets background dist clean all
 
 #---------------------------------------------------------------------------------
 all: FsLib SDLLib Assets $(BUILD)
@@ -175,7 +175,26 @@ Assets:
 #---------------------------------------------------------------------------------
 
 background:
-	@$(MAKE) -C ./sysmodule -j
+	@$(MAKE) -C ./sysmodule -j APP_VERSION=$(APP_VERSION)
+	@$(MAKE) -C ./sysmodule/monitor
+
+#---------------------------------------------------------------------------------
+# Lays out everything that goes on the SD card under dist/sd and zips it. Needs `make` and `make background` first.
+DIST_DIR	:=	dist/sd
+DIST_ZIP	:=	dist/JKSV-BaiduNetdisk-$(APP_VERSION).zip
+
+dist:
+	@rm -rf dist
+	@mkdir -p $(DIST_DIR)/switch/JKSV $(DIST_DIR)/config/JKSV \
+		$(DIST_DIR)/atmosphere/contents/420000004A4B5344/flags $(DIST_DIR)/atmosphere/contents/420000004A4B5345
+	@cp $(TARGET).nro $(DIST_DIR)/switch/JKSV/JKSV.nro
+	@cp sysmodule/monitor/JKSVBaiduMonitor.nsp $(DIST_DIR)/atmosphere/contents/420000004A4B5344/exefs.nsp
+	@cp sysmodule/toolbox.json $(DIST_DIR)/atmosphere/contents/420000004A4B5344/toolbox.json
+	@touch $(DIST_DIR)/atmosphere/contents/420000004A4B5344/flags/boot2.flag
+	@cp sysmodule/JKSVBaiduSync.nsp $(DIST_DIR)/atmosphere/contents/420000004A4B5345/exefs.nsp
+	@cp sysmodule/baidu.example.json $(DIST_DIR)/config/JKSV/baidu.example.json
+	@cd $(DIST_DIR) && zip -qr ../$(notdir $(DIST_ZIP)) .
+	@echo built $(DIST_ZIP)
 
 #---------------------------------------------------------------------------------
 
